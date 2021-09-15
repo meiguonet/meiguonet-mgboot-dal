@@ -1,0 +1,22 @@
+{
+  "name": "meiguonet/meiguonet-mgboot-dal",
+  "description": "data access layer libraries for meiguonet mgboot framework",
+  "keywords": [],
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Simon.Ye",
+      "email": "samlinye@163.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "mgboot\\dal\\": "src/"
+    }
+  },
+  "require": {
+    "php": ">=7.2.0",
+    "meiguonet/meiguonet-mgboot-common": "^1.0.0",
+    "psr/log": "^1.1.4"
+  }
+}
