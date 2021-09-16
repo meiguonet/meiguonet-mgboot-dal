@@ -27,7 +27,7 @@ final class DB
     /**
      * @var LoggerInterface|null
      */
-    private static $logger;
+    private static $logger = null;
 
     /**
      * @var bool
@@ -630,6 +630,7 @@ final class DB
     private static function fromGobackendAsync(array $payloads): array
     {
         $wg = Swoole::newWaitGroup();
+        $wg->add();
         $ret = ['', ''];
 
         Swoole::runInCoroutine(function () use ($payloads, $wg, &$ret) {
@@ -735,6 +736,7 @@ final class DB
 
         $txm = TxManager::create($pdo);
         $wg = Swoole::newWaitGroup();
+        $wg->add();
 
         try {
             Swoole::runInCoroutine(function () use ($callback, $pdo, $txm, $wg) {

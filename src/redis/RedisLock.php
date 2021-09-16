@@ -73,6 +73,7 @@ final class RedisLock
 
         if (Swoole::inCoroutineMode(true)) {
             $wg = Swoole::newWaitGroup();
+            $wg->add();
             $flag = false;
 
             Swoole::runInCoroutine(function () use ($redis, $script, $key, $contents, $waitTimeout, $ttl, $wg, &$flag) {

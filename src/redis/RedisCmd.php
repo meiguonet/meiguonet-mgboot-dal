@@ -1473,6 +1473,7 @@ final class RedisCmd
     private static function fromGobackendAsync(array $payloads): string
     {
         $wg = Swoole::newWaitGroup();
+        $wg->add();
         $parts = ['', ''];
         
         Swoole::runInCoroutine(function () use ($payloads, $wg, &$parts) {

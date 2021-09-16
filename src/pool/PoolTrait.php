@@ -2,6 +2,7 @@
 
 namespace mgboot\dal\pool;
 
+use mgboot\common\constant\DateTimeFormat;
 use mgboot\common\DotAccessData;
 use mgboot\common\Cast;
 use mgboot\common\constant\Regexp;
@@ -112,7 +113,7 @@ trait PoolTrait
             'poolId' => '',
             'currentActive' => $currentActive,
             'idleCheckRunning' => 0,
-            'lastUsedAt' => 0
+            'lastUsedAt' => ''
         ]);
 
         $this->runIdleChecker();
@@ -441,7 +442,7 @@ trait PoolTrait
             'poolId' => $this->poolId,
             'currentActive' => 0,
             'idleCheckRunning' => 0,
-            'lastUsedAt' => 0
+            'lastUsedAt' => ''
         ]);
     }
 
@@ -455,12 +456,12 @@ trait PoolTrait
         $key = 'conn:' . spl_object_hash($conn);
 
         if (is_int($timestamp) && $timestamp > 0) {
-            SwooleTable::setValue($tableName, $key, ['lastUsedAt' => $timestamp]);
+            SwooleTable::setValue($tableName, $key, ['lastUsedAt' => date(DateTimeFormat::FULL, $timestamp)]);
             return 0;
         }
 
         $data = SwooleTable::getValue($tableName, $key);
-        return is_array($data) ? Cast::toInt($data['lastUsedAt'], 0) : 0;
+        return is_array($data) && is_string($data['lastUsedAt']) ? strtotime($data['lastUsedAt']) : 0;
     }
 
     private function logWithRemoveEvent($conn): void
