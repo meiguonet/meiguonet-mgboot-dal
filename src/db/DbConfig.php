@@ -85,7 +85,10 @@ final class DbConfig
                 unset($settings['database']);
             }
 
-            if (is_array($settings['cli-mode'])) {
+            if (is_array($settings['cliMode'])) {
+                $settings['cliSettings'] = $settings['cliMode'];
+                unset($settings['cli-mode']);
+            } else if (is_array($settings['cli-mode'])) {
                 $settings['cliSettings'] = $settings['cli-mode'];
                 unset($settings['cli-mode']);
             }

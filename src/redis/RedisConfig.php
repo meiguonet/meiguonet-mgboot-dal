@@ -72,11 +72,18 @@ final class RedisConfig
     public static function create(?array $settings = null): self
     {
         if (is_array($settings)) {
+            if (is_string($settings['readTimeout']) && $settings['readTimeout'] !== '') {
+                $settings['readTimeout'] = Cast::toDuration($settings['readTimeout']);
+            }
+
             if (is_string($settings['read-timeout']) && $settings['read-timeout'] !== '') {
                 $settings['read-timeout'] = Cast::toDuration($settings['read-timeout']);
             }
 
-            if (is_array($settings['cli-mode'])) {
+            if (is_array($settings['cliMode'])) {
+                $settings['cliSettings'] = $settings['cliMode'];
+                unset($settings['cliMode']);
+            } else if (is_array($settings['cli-mode'])) {
                 $settings['cliSettings'] = $settings['cli-mode'];
                 unset($settings['cli-mode']);
             }

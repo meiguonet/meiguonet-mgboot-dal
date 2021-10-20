@@ -6,6 +6,7 @@ use Closure;
 use Illuminate\Support\Collection;
 use mgboot\common\AppConf;
 use mgboot\common\Cast;
+use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\ArrayUtils;
 use mgboot\common\constant\Regexp;
 use mgboot\dal\ConnectionBuilder;
@@ -50,9 +51,9 @@ final class DB
     private static $cacheDir = 'classpath:cache';
 
     /**
-     * @var array
+     * @var string
      */
-    private static $tableSchemas = [];
+    private static $cacheKeyTableSchemas = 'tableSchemas';
 
     private function __construct()
     {
@@ -110,13 +111,86 @@ final class DB
 
     public static function buildTableSchemas(): void
     {
-        $inDevMode = AppConf::getEnv() === 'dev';
-
-        if ($inDevMode) {
+        if (AppConf::getEnv() === 'dev' && !AppConf::getBoolean('datasource.forceTableSchemasCache')) {
             return;
         }
 
-        self::$tableSchemas = self::buildTableSchemasFromCacheFile();
+        if (is_object(Swoole::getServer())) {
+            $schemas = self::buildTableSchemasInternal();
+
+            if (empty($schemas)) {
+                return;
+            }
+
+            $table = SwooleTable::getTable(SwooleTable::cacheTableName());
+
+            if (!is_object($table)) {
+                return;
+            }
+
+            $table->set(self::$cacheKeyTableSchemas, [
+                'value' => JsonUtils::toJson($schemas),
+                'expiry' => 0
+            ]);
+
+            return;
+        }
+
+        $cacheFile = rtrim(self::$cacheDir, '/') . '/table_schemas.php';
+        $cacheFile = FileUtils::getRealpath($cacheFile);
+
+        if (is_file($cacheFile)) {
+            try {
+                $schemas = include($cacheFile);
+            } catch (Throwable $ex) {
+                $schemas = [];
+            }
+
+            if (is_array($schemas) && !empty($schemas)) {
+                return;
+            }
+        }
+
+        self::writeTableSchemasToCacheFile(self::buildTableSchemasInternal());
+    }
+
+    public static function getTableSchemas(): array
+    {
+        if (AppConf::getEnv() === 'dev' && !AppConf::getBoolean('datasource.forceTableSchemasCache')) {
+            return self::buildTableSchemasInternal();
+        }
+
+        if (is_object(Swoole::getServer())) {
+            $table = SwooleTable::getTable(SwooleTable::cacheTableName());
+
+            if (!is_object($table)) {
+                return [];
+            }
+
+            $entry = $table->get(self::$cacheKeyTableSchemas);
+
+            if (!is_array($entry) || !is_string($entry['value'])) {
+                return [];
+            }
+
+            $schemas = JsonUtils::mapFrom($entry['value']);
+            return is_array($schemas) ? $schemas : [];
+        }
+
+        $cacheFile = rtrim(self::$cacheDir, '/') . '/table_schemas.php';
+        $cacheFile = FileUtils::getRealpath($cacheFile);
+
+        if (!is_file($cacheFile)) {
+            return [];
+        }
+
+        try {
+            $schemas = include($cacheFile);
+        } catch (Throwable $ex) {
+            $schemas = [];
+        }
+
+        return is_array($schemas) ? $schemas : [];
     }
 
     public static function getTableSchema(string $tableName): array
@@ -127,18 +201,8 @@ final class DB
             $tableName = StringUtils::substringAfterLast($tableName, '.');
         }
 
-        if (AppConf::getEnv() === 'dev') {
-            $schemas = self::buildTableSchemasInternal();
-        } else {
-            $schemas = self::$tableSchemas;
-
-            if (empty($schemas)) {
-                self::buildTableSchemas();
-                $schemas = self::$tableSchemas;
-            }
-        }
-
-        return is_array($schemas) && isset($schemas[$tableName]) ? $schemas[$tableName] : [];
+        $schemas = self::getTableSchemas();
+        return $schemas[$tableName] ?? [];
     }
 
     public static function table(string $tableName): QueryBuilder
@@ -153,9 +217,15 @@ final class DB
 
     public static function selectBySql(string $sql, array $params = [], ?TxManager $txm = null): Collection
     {
-        self::logSql($sql, $params);
+        $logger = self::$logger;
+        $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
+            if ($canWriteLog) {
+                $logger->info('DB Context run in gobackend mode');
+            }
+
+            self::logSql($sql, $params);
             list($result, $errorTips) = self::fromGobackend('@@select', $sql, $params);
 
             if (!empty($errorTips)) {
@@ -170,6 +240,12 @@ final class DB
         try {
             /* @var PDO $pdo */
             list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+
+            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+                $logger->info('DB Context run in connection pool mode');
+            }
+
+            self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -201,9 +277,15 @@ final class DB
 
     public static function firstBySql(string $sql, array $params = [], ?TxManager $txm = null): ?array
     {
-        self::logSql($sql, $params);
+        $logger = self::$logger;
+        $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
+            if ($canWriteLog) {
+                $logger->info('DB Context run in gobackend mode');
+            }
+
+            self::logSql($sql, $params);
             list($result, $errorTips) = self::fromGobackend('@@first', $sql, $params);
 
             if (!empty($errorTips)) {
@@ -219,6 +301,12 @@ final class DB
         try {
             /* @var PDO $pdo */
             list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+
+            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+                $logger->info('DB Context run in connection pool mode');
+            }
+
+            self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -251,18 +339,15 @@ final class DB
 
     public static function countBySql(string $sql, array $params = [], ?TxManager $txm = null): int
     {
-        self::logSql($sql, $params);
-
-        try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
-        } catch (Throwable $ex) {
-            $ex = self::wrapAsDbException($ex);
-            self::writeErrorLog($ex);
-            throw $ex;
-        }
+        $logger = self::$logger;
+        $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
+            if ($canWriteLog) {
+                $logger->info('DB Context run in gobackend mode');
+            }
+
+            self::logSql($sql, $params);
             list($result, $errorTips) = self::fromGobackend('@@count', $sql, $params);
 
             if (!empty($errorTips)) {
@@ -272,6 +357,21 @@ final class DB
             }
 
             return Cast::toInt($result, 0);
+        }
+
+        try {
+            /* @var PDO $pdo */
+            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+
+            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+                $logger->info('DB Context run in connection pool mode');
+            }
+
+            self::logSql($sql, $params);
+        } catch (Throwable $ex) {
+            $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
         }
 
         $err = null;
@@ -299,9 +399,15 @@ final class DB
 
     public static function insertBySql(string $sql, array $params = [], ?TxManager $txm = null): int
     {
-        self::logSql($sql, $params);
+        $logger = self::$logger;
+        $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
+            if ($canWriteLog) {
+                $logger->info('DB Context run in gobackend mode');
+            }
+
+            self::logSql($sql, $params);
             list($result, $errorTips) = self::fromGobackend('@@insert', $sql, $params);
 
             if (!empty($errorTips)) {
@@ -316,6 +422,12 @@ final class DB
         try {
             /* @var PDO $pdo */
             list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+
+            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+                $logger->info('DB Context run in connection pool mode');
+            }
+
+            self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -351,9 +463,15 @@ final class DB
 
     public static function updateBySql(string $sql, array $params = [], ?TxManager $txm = null): int
     {
-        self::logSql($sql, $params);
+        $logger = self::$logger;
+        $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
+            if ($canWriteLog) {
+                $logger->info('DB Context run in gobackend mode');
+            }
+
+            self::logSql($sql, $params);
             list($result, $errorTips) = self::fromGobackend('@@update', $sql, $params);
 
             if (!empty($errorTips)) {
@@ -368,6 +486,12 @@ final class DB
         try {
             /* @var PDO $pdo */
             list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+
+            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+                $logger->info('DB Context run in connection pool mode');
+            }
+
+            self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -409,9 +533,15 @@ final class DB
      */
     public static function sumBySql(string $sql, array $params = [], ?TxManager $txm = null)
     {
-        self::logSql($sql, $params);
+        $logger = self::$logger;
+        $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
+            if ($canWriteLog) {
+                $logger->info('DB Context run in gobackend mode');
+            }
+
+            self::logSql($sql, $params);
             list($result, $errorTips) = self::fromGobackend('@@sum', $sql, $params);
 
             if (!empty($errorTips)) {
@@ -433,6 +563,12 @@ final class DB
         try {
             /* @var PDO $pdo */
             list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+
+            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+                $logger->info('DB Context run in connection pool mode');
+            }
+
+            self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -491,9 +627,15 @@ final class DB
 
     public static function executeSql(string $sql, array $params = [], ?TxManager $txm = null): void
     {
-        self::logSql($sql, $params);
+        $logger = self::$logger;
+        $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
+            if ($canWriteLog) {
+                $logger->info('DB Context run in gobackend mode');
+            }
+
+            self::logSql($sql, $params);
             list(, $errorTips) = self::fromGobackend('@@execute', $sql, $params);
 
             if (!empty($errorTips)) {
@@ -508,6 +650,12 @@ final class DB
         try {
             /* @var PDO $pdo */
             list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+
+            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+                $logger->info('DB Context run in connection pool mode');
+            }
+
+            self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -932,47 +1080,14 @@ final class DB
         return $schemas;
     }
 
-    private static function buildTableSchemasFromCacheFile(): array
-    {
-        $dir = FileUtils::getRealpath(self::$cacheDir);
-
-        if (!is_dir($dir)) {
-            return self::buildTableSchemasInternal();
-        }
-
-        $cacheFile = "$dir/table_schemas.php";
-        $schemas = [];
-
-        if (is_file($cacheFile)) {
-            try {
-                $schemas = include($cacheFile);
-            } catch (Throwable $ex) {
-                $schemas = [];
-            }
-        }
-
-        if (is_array($schemas) && !empty($schemas)) {
-            return $schemas;
-        }
-
-        $schemas = self::buildTableSchemasInternal();
-        self::writeTableSchemasToCacheFile($schemas);
-        return $schemas;
-    }
-
     private static function writeTableSchemasToCacheFile(array $schemas): void
     {
         if (empty($schemas)) {
             return;
         }
 
-        $dir = FileUtils::getRealpath(self::$cacheDir);
-
-        if (!is_dir($dir) || !is_writable($dir)) {
-            return;
-        }
-
-        $cacheFile = "$dir/table_schemas.php";
+        $cacheFile = rtrim(self::$cacheDir, '/') . '/table_schemas.php';
+        $cacheFile = FileUtils::getRealpath($cacheFile);
         $fp = fopen($cacheFile, 'w');
 
         if (!is_resource($fp)) {

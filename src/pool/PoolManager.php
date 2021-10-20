@@ -103,6 +103,11 @@ final class PoolManager
         return is_array($data) ? Cast::toString($data['poolId']) : '';
     }
 
+    public static function isFromPool($conn): bool
+    {
+        return self::getPoolIdFromConnection($conn) !== '';
+    }
+
     public static function releaseConnection($conn, ?Throwable $ex = null): void
     {
         if (!is_object($conn)) {
