@@ -595,7 +595,7 @@ trait PoolTrait
 
         $logger = $this->logger;
 
-        if (is_object($logger)) {
+        if (!is_object($logger)) {
             return;
         }
 
