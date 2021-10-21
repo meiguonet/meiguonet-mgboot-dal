@@ -2,9 +2,8 @@
 
 namespace mgboot\dal\pool;
 
-use mgboot\common\constant\DateTimeFormat;
-use mgboot\common\DotAccessData;
 use mgboot\common\Cast;
+use mgboot\common\constant\DateTimeFormat;
 use mgboot\common\constant\Regexp;
 use mgboot\common\swoole\Swoole;
 use mgboot\common\swoole\SwooleTable;
@@ -55,7 +54,11 @@ trait PoolTrait
      * @var int
      */
     private $idleCheckInterval = 10;
-    
+
+    /**
+     * @var \Swoole\Coroutine\Channel|null
+     * @noinspection PhpFullyQualifiedNameUsageInspection
+     */
     private $connChan = null;
 
     public function inDebugMode(?bool $flag = null): bool
@@ -86,10 +89,9 @@ trait PoolTrait
         return $this->poolId;
     }
 
-    /** @noinspection PhpFullyQualifiedNameUsageInspection
-     */
     public function run(): void
     {
+        /** @noinspection PhpFullyQualifiedNameUsageInspection */
         $ch = new \Swoole\Coroutine\Channel($this->maxActive);
         $currentActive = 0;
 
@@ -106,21 +108,21 @@ trait PoolTrait
         }
 
         $this->connChan = $ch;
-        $tableName = SwooleTable::poolTableName();
         $key = $this->poolId;
+        $table = SwooleTable::getTable(SwooleTable::poolTableName());
 
-        SwooleTable::setValue($tableName, $key, [
-            'poolId' => '',
-            'currentActive' => $currentActive,
-            'idleCheckRunning' => 0,
-            'lastUsedAt' => ''
-        ]);
+        if (is_object($table)) {
+            $table->set($key, [
+                'poolId' => '',
+                'currentActive' => $currentActive,
+                'idleCheckRunning' => 0,
+                'lastUsedAt' => ''
+            ]);
+        }
 
         $this->runIdleChecker();
     }
 
-    /** @noinspection PhpFullyQualifiedNameUsageInspection
-     */
     public function take($timeout = null)
     {
         $ex1 = new RuntimeException('fail to take connection from connection pool: ' . get_class($this));
@@ -137,7 +139,7 @@ trait PoolTrait
 
         $ch = $this->connChan;
 
-        if (!($ch instanceof \Swoole\Coroutine\Channel)) {
+        if (!is_object($ch)) {
             throw $ex1;
         }
 
@@ -179,8 +181,6 @@ trait PoolTrait
         return $conn;
     }
 
-    /** @noinspection PhpFullyQualifiedNameUsageInspection
-     */
     public function release($conn): void
     {
         if (!is_object($conn)) {
@@ -189,7 +189,7 @@ trait PoolTrait
 
         $ch = $this->connChan;
 
-        if (!($ch instanceof \Swoole\Coroutine\Channel)) {
+        if (!is_object($ch)) {
             return;
         }
 
@@ -205,29 +205,33 @@ trait PoolTrait
 
     public function updateCurrentActive(int $num): void
     {
-        $tableName = SwooleTable::poolTableName();
+        $table = SwooleTable::getTable(SwooleTable::poolTableName());
+
+        if (!is_object($table)) {
+            return;
+        }
+
         $key = $this->poolId;
 
         if ($num > 0) {
-            SwooleTable::incr($tableName, $key, 'currentActive', $num);
+            $table->incr($key, 'currentActive', $num);
         } else {
             $n1 = $this->getCurrentActive();
             $n2 = abs($num);
 
             if ($n1 - $n2 < 0) {
-                SwooleTable::setValue($tableName, $key, ['currentActive' => 0]);
+                $table->set($key, ['currentActive' => 0]);
             } else {
-                SwooleTable::decr($tableName, $key, 'currentActive', $n2);
+                $table->decr($key, 'currentActive', $n2);
             }
         }
     }
 
-    /** @noinspection PhpFullyQualifiedNameUsageInspection */
     public function destroy($timeout = null): void
     {
         $ch = $this->connChan;
 
-        if (!($ch instanceof \Swoole\Coroutine\Channel)) {
+        if (!is_object($ch)) {
             return;
         }
 
@@ -266,16 +270,16 @@ trait PoolTrait
         }
     }
 
-    /** @noinspection PhpFullyQualifiedNameUsageInspection */
     private function runIdleChecker(): void
     {
         $ch = $this->connChan;
 
-        if (!($ch instanceof \Swoole\Coroutine\Channel)) {
+        if (!is_object($ch)) {
             return;
         }
 
-        Swoole::timerTick($this->idleCheckInterval * 1000, function () use ($ch) {
+        /** @noinspection PhpFullyQualifiedNameUsageInspection */
+        \Swoole\Timer::tick($this->idleCheckInterval * 1000, function () use ($ch) {
             $this->idleCheckRunning(true);
             $now = time();
             $connections = [];
@@ -317,7 +321,7 @@ trait PoolTrait
             foreach ($connections as $conn) {
                 $ch->push($conn);
             }
-            
+
             $this->idleCheckRunning(false);
         });
     }
@@ -325,15 +329,24 @@ trait PoolTrait
     private function init(array $settings): void
     {
         $settings = $this->handleSettings($settings);
-        $data = DotAccessData::fromArray($settings);
-        $minActive = $data->getInt('minActive', 10);
-        $maxActive = $data->getInt('maxActive', $minActive);
+        $minActive = 10;
 
-        if ($maxActive < $minActive) {
-            $maxActive = $minActive;
+        if (is_int($settings['minActive']) && $settings['minActive'] > 0) {
+            $minActive = $settings['minActive'];
         }
 
-        $takeTimeout = $data->getFloat('takeTimeout', 3.0);
+        $maxActive = $minActive;
+
+        if (is_int($settings['maxActive']) && $settings['maxActive'] > $minActive) {
+            $maxActive = $settings['maxActive'];
+        }
+
+        $takeTimeout = 3.0;
+        $n1 = Cast::toFloat($settings['takeTimeout']);
+
+        if ($n1 > 0) {
+            $takeTimeout = $n1;
+        }
 
         if ($takeTimeout < 1.0) {
             $takeTimeout = 1.0;
@@ -409,23 +422,33 @@ trait PoolTrait
 
     private function getCurrentActive(): int
     {
-        $tableName = SwooleTable::poolTableName();
+        $table = SwooleTable::getTable(SwooleTable::poolTableName());
+
+        if (!is_object($table)) {
+            return 0;
+        }
+
         $key = $this->poolId;
-        $data = SwooleTable::getValue($tableName, $key);
+        $data = $table->get($key);
         return is_array($data) ? Cast::toInt($data['currentActive'], 0) : 0;
     }
 
     private function idleCheckRunning(?bool $flag = null): bool
     {
-        $tableName = SwooleTable::poolTableName();
-        $key = $this->poolId;
+        $table = SwooleTable::getTable(SwooleTable::poolTableName());
 
-        if (is_bool($flag)) {
-            SwooleTable::setValue($tableName, $key, ['idleCheckRunning' => $flag === true ? 1 : 0]);
+        if (!is_object($table)) {
             return false;
         }
 
-        $data = SwooleTable::getValue($tableName, $key);
+        $key = $this->poolId;
+
+        if (is_bool($flag)) {
+            $table->set($key, ['idleCheckRunning' => $flag === true ? 1 : 0]);
+            return false;
+        }
+
+        $data = $table->get($key);
         return is_array($data) && Cast::toInt($data['idleCheckRunning']) === 1;
     }
 
@@ -435,10 +458,15 @@ trait PoolTrait
             return;
         }
 
-        $tableName = SwooleTable::poolTableName();
+        $table = SwooleTable::getTable(SwooleTable::poolTableName());
+
+        if (!is_object($table)) {
+            return;
+        }
+
         $key = 'conn:' . spl_object_hash($conn);
 
-        SwooleTable::setValue($tableName, $key, [
+        $table->set($key, [
             'poolId' => $this->poolId,
             'currentActive' => 0,
             'idleCheckRunning' => 0,
@@ -452,15 +480,20 @@ trait PoolTrait
             return 0;
         }
 
-        $tableName = SwooleTable::poolTableName();
-        $key = 'conn:' . spl_object_hash($conn);
+        $table = SwooleTable::getTable(SwooleTable::poolTableName());
 
-        if (is_int($timestamp) && $timestamp > 0) {
-            SwooleTable::setValue($tableName, $key, ['lastUsedAt' => date(DateTimeFormat::FULL, $timestamp)]);
+        if (!is_object($table)) {
             return 0;
         }
 
-        $data = SwooleTable::getValue($tableName, $key);
+        $key = 'conn:' . spl_object_hash($conn);
+
+        if (is_int($timestamp) && $timestamp > 0) {
+            $table->set($key, ['lastUsedAt' => date(DateTimeFormat::FULL, $timestamp)]);
+            return 0;
+        }
+
+        $data = $table->get($key);
         return is_array($data) && is_string($data['lastUsedAt']) ? strtotime($data['lastUsedAt']) : 0;
     }
 

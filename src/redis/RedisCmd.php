@@ -1472,62 +1472,29 @@ final class RedisCmd
     
     private static function fromGobackendAsync(array $payloads): string
     {
-        $wg = Swoole::newWaitGroup();
-        $wg->add();
-        $parts = ['', ''];
-        
-        Swoole::runInCoroutine(function () use ($payloads, $wg, &$parts) {
-            Swoole::defer(function () use ($wg) {
-                $wg->done();
-            });
+        list($host, $port, $msg) = $payloads;
+        /** @noinspection PhpFullyQualifiedNameUsageInspection */
+        $socket = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, 0);
 
-            list($host, $port, $msg) = $payloads;
-            $fp = fsockopen($host, $port);
-
-            if (!is_resource($fp)) {
-                $parts[1] = 'RedisCmd: fail to connect to gobackend';
-                return;
-            }
-
-            try {
-                fwrite($fp, $msg);
-                stream_set_timeout($fp, 5);
-                $result = '';
-
-                while (!feof($fp)) {
-                    $buf = fread($fp, 2 * 1024 * 1024);
-                    $info = stream_get_meta_data($fp);
-
-                    if ($info['timed_out']) {
-                        $parts[1] = 'RedisCmd: read timeout from gobackend';
-                        return;
-                    }
-
-                    if (is_string($buf) && $buf !== '') {
-                        $result .= $buf;
-                    }
-                }
-
-                if (!is_string($result) || $result === '') {
-                    $parts[1] = 'RedisCmd: no contents read from gobackend';
-                } else {
-                    $parts[0] = str_replace('@^@end', '', $result);
-                }
-            } catch (Throwable $ex) {
-                $parts[1] = $ex->getMessage();
-            } finally {
-                fclose($fp);
-            }
-        });
-        
-        $wg->wait();
-        list($result, $errorTips) = $parts;
-        
-        if (!empty($errorTips)) {
-            throw new RuntimeException($errorTips);
+        if ($socket->connect($host, $port, 0.5) !== true) {
+            throw new RuntimeException('RedisCmd: fail to connect to gobackend');
         }
-        
-        return $result;
+
+        $n1 = $socket->sendAll($msg);
+
+        if (!is_int($n1) || $n1 < strlen($msg)) {
+            $socket->close();
+            throw new RuntimeException('RedisCmd: fail to send data to gobackend');
+        }
+
+        $result = $socket->recvAll(2 * 1024 * 1024, 2.0);
+        $socket->close();
+
+        if (!is_string($result)) {
+            throw new RuntimeException('RedisCmd: fail to read data from gobackend');
+        }
+
+        return str_replace('@^@end', '', $result);
     }
 
     private static function fromPhpRedis(string $cmd, ?array $args = null)

@@ -777,64 +777,39 @@ final class DB
 
     private static function fromGobackendAsync(array $payloads): array
     {
-        $wg = Swoole::newWaitGroup();
-        $wg->add();
         $ret = ['', ''];
+        list ($host, $port, $timeout, $maxPkgLength, $msg) = $payloads;
+        /** @noinspection PhpFullyQualifiedNameUsageInspection */
+        $socket = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, 0);
 
-        Swoole::runInCoroutine(function () use ($payloads, $wg, &$ret) {
-            Swoole::defer(function () use ($wg) {
-                $wg->done();
-            });
+        if ($socket->connect($host, $port, 0.5) !== true) {
+            $ret[1] = 'fail to connect to gobackend';
+            return $ret;
+        }
 
-            list ($host, $port, $timeout, $maxPkgLength, $msg) = $payloads;
-            $fp = fsockopen($host, $port);
+        $n1 = $socket->sendAll($msg);
 
-            if (!is_resource($fp)) {
-                $ret[1] = 'fail to connect to gobackend';
-                return;
+        if (!is_int($n1) || $n1 < strlen($msg)) {
+            $socket->close();
+            $ret[1] = 'fail to send data to gobackend';
+            return $ret;
+        }
+
+        $result = $socket->recvAll($maxPkgLength, floatval($timeout));
+        $socket->close();
+
+        if (is_string($result)) {
+            $result = trim(str_replace('@^@end', '', $result));
+
+            if (StringUtils::startsWith($result, '@@error:')) {
+                $ret[1] = str_replace('@@error:', '', $result);
+            } else {
+                $ret[0] = $result;
             }
+        } else {
+            $ret[1] = 'fail to read data from gobackend';
+        }
 
-            try {
-                fwrite($fp, $msg);
-                stream_set_timeout($fp, $timeout);
-                $result = '';
-
-                while (!feof($fp)) {
-                    $buf = fread($fp, $maxPkgLength);
-                    $info = stream_get_meta_data($fp);
-
-                    if ($info['timed_out']) {
-                        $ret[1] = 'read timeout';
-                        return;
-                    }
-
-                    if (!is_string($buf)) {
-                        continue;
-                    }
-
-                    $result .= $buf;
-                }
-
-                if (!is_string($result) || $result === '') {
-                    $ret[1] = 'no contents readed';
-                    return;
-                }
-
-                $result = trim(str_replace('@^@end', '', $result));
-
-                if (StringUtils::startsWith($result, '@@error:')) {
-                    $ret[1] = str_replace('@@error:', '', $result);
-                } else {
-                    $ret[0] = $result;
-                }
-            } catch (Throwable $ex) {
-                $ret[1] = $ex->getMessage();
-            } finally {
-                fclose($fp);
-            }
-        });
-
-        $wg->wait();
         return $ret;
     }
 
@@ -883,15 +858,12 @@ final class DB
         }
 
         $txm = TxManager::create($pdo);
-        $wg = Swoole::newWaitGroup();
+        /** @noinspection PhpFullyQualifiedNameUsageInspection */
+        $wg = new \Swoole\Coroutine\WaitGroup();
         $wg->add();
 
         try {
-            Swoole::runInCoroutine(function () use ($callback, $pdo, $txm, $wg) {
-                Swoole::defer(function () use ($wg) {
-                    $wg->done();
-                });
-
+            go(function () use ($callback, $pdo, $txm, $wg) {
                 $err = null;
 
                 try {
@@ -905,6 +877,7 @@ final class DB
                     throw $err;
                 } finally {
                     PoolManager::releaseConnection($pdo, $err);
+                    $wg->done();
                 }
             });
 
