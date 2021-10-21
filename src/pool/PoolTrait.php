@@ -531,7 +531,7 @@ trait PoolTrait
         $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
-            '%s%spool start idle connection check...',
+            '%s%s pool start idle connection check...',
             $workerId >= 0 ? "in worker$workerId, " : '',
             $poolType
         );
