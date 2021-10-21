@@ -323,29 +323,38 @@ trait PoolTrait
             $now = time();
             $connections = [];
 
-            while (!$ch->isEmpty()) {
-                $conn = $ch->pop(0.01);
-
-                if (!is_object($conn) || !($conn instanceof Connection)) {
-                    continue;
+            while (true) {
+                if (time() - $now > 15) {
+                    break;
                 }
 
-                $lastUsedAt = $conn->getLastUsedAt();
+                for ($i = 1; $i <= $this->maxActive; $i++) {
+                    $conn = $ch->pop(0.01);
 
-                if (!is_int($lastUsedAt) || $lastUsedAt < 1) {
-                    $conn->updateLastUsedAt(time());
+                    if (!is_object($conn) || !($conn instanceof Connection)) {
+                        continue;
+                    }
+
+                    $lastUsedAt = $conn->getLastUsedAt();
+
+                    if (!is_int($lastUsedAt) || $lastUsedAt < 1) {
+                        $conn->updateLastUsedAt(time());
+                        $connections[] = $conn;
+                        continue;
+                    }
+
+                    if ($now - $lastUsedAt >= $this->maxIdleTime) {
+                        $conn->destroy();
+                        $this->updateCurrentActive(-1);
+                        $this->logWithRemoveEvent($conn);
+                        continue;
+                    }
+
                     $connections[] = $conn;
-                    continue;
                 }
 
-                if ($now - $lastUsedAt >= $this->maxIdleTime) {
-                    $conn->destroy();
-                    $this->updateCurrentActive(-1);
-                    $this->logWithRemoveEvent($conn);
-                    continue;
-                }
-
-                $connections[] = $conn;
+                /** @noinspection PhpFullyQualifiedNameUsageInspection */
+                \Swoole\Coroutine::sleep(0.05);
             }
 
             foreach ($connections as $conn) {
