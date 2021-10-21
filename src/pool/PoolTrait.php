@@ -526,16 +526,18 @@ trait PoolTrait
 
         $logger = $this->logger;
 
-        if (!($logger instanceof LoggerInterface)) {
+        if (!is_object($logger)) {
             return;
         }
 
         $workerId = Swoole::getWorkerId();
+        $poolType = StringUtils::substringBefore($this->poolId, ':');
         $connectionId = spl_object_hash($conn);
 
         $msg = sprintf(
-            '%sconnection[%s] has reach the max idle time, remove from pool',
-            $workerId >= 0 ? "in worker$workerId: " : '',
+            '%s%sconnection[%s] has reach the max idle time, remove from pool',
+            $workerId >= 0 ? "in worker$workerId, " : '',
+            $poolType,
             $connectionId
         );
 
@@ -550,16 +552,18 @@ trait PoolTrait
 
         $logger = $this->logger;
 
-        if (!($logger instanceof LoggerInterface)) {
+        if (!is_object($logger)) {
             return;
         }
 
         $workerId = Swoole::getWorkerId();
+        $poolType = StringUtils::substringBefore($this->poolId, ':');
         $connectionId = spl_object_hash($conn);
 
         $msg = sprintf(
-            '%ssuccess to take connection[%s] from pool',
-            $workerId >= 0 ? "in worker$workerId: " : '',
+            '%ssuccess to take %s connection[%s] from pool',
+            $workerId >= 0 ? "in worker$workerId, " : '',
+            $poolType,
             $connectionId
         );
 
@@ -574,15 +578,17 @@ trait PoolTrait
 
         $logger = $this->logger;
 
-        if (!($logger instanceof LoggerInterface)) {
+        if (!is_object($logger)) {
             return;
         }
 
         $workerId = Swoole::getWorkerId();
+        $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
-            '%sfail to take connection from pool',
-            $workerId >= 0 ? "in worker$workerId: " : ''
+            '%sfail to take %s connection from pool',
+            $workerId >= 0 ? "in worker$workerId, " : '',
+            $poolType
         );
 
         $logger->info($msg);
@@ -596,16 +602,18 @@ trait PoolTrait
 
         $logger = $this->logger;
 
-        if (!($logger instanceof LoggerInterface)) {
+        if (is_object($logger)) {
             return;
         }
 
         $workerId = Swoole::getWorkerId();
+        $poolType = StringUtils::substringBefore($this->poolId, ':');
         $connectionId = spl_object_hash($conn);
 
         $msg = sprintf(
-            '%srelease connection[%s] to pool',
-            $workerId >= 0 ? "in worker$workerId: " : '',
+            '%srelease %s connection[%s] to pool',
+            $workerId >= 0 ? "in worker$workerId, " : '',
+            $poolType,
             $connectionId
         );
 

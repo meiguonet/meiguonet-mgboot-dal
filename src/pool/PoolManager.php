@@ -7,7 +7,6 @@ use mgboot\common\swoole\Swoole;
 use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\StringUtils;
 use mgboot\dal\ConnectionBuilder;
-use Psr\Log\LoggerInterface;
 use Throwable;
 
 final class PoolManager
@@ -141,10 +140,10 @@ final class PoolManager
             if ($pool->inDebugMode()) {
                 $logger = $pool->getLogger();
 
-                if ($logger instanceof LoggerInterface) {
+                if (is_object($logger)) {
                     $workerId = Swoole::getWorkerId();
                     $connectionId = spl_object_hash($conn);
-                    $logger->info("in worker$workerId: connection[$connectionId] has gone away, remove from pool");
+                    $logger->info("in worker$workerId, $poolType connection[$connectionId] has gone away, remove from pool");
                 }
             }
 
