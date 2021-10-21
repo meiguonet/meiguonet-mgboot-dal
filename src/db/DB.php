@@ -9,6 +9,7 @@ use mgboot\common\Cast;
 use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\ArrayUtils;
 use mgboot\common\constant\Regexp;
+use mgboot\dal\Connection;
 use mgboot\dal\ConnectionBuilder;
 use mgboot\dal\GobackendSettings;
 use mgboot\common\swoole\Swoole;
@@ -238,16 +239,33 @@ final class DB
         }
 
         try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+            list($fromTxManager, $conn) = self::getPdoConnection($txm);
 
-            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+            if ($fromTxManager && $canWriteLog) {
+                $logger->info('DB Context run in transation mode');
+            } else if ($conn instanceof Connection && $canWriteLog) {
                 $logger->info('DB Context run in connection pool mode');
             }
 
             self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
+        }
+
+        if ($conn instanceof Connection) {
+            $pdo = $conn->getPdo();
+        } else {
+            $pdo = $conn;
+        }
+
+        if (!($pdo instanceof PDO)) {
+            if (!$fromTxManager) {
+                PoolManager::releaseConnection($conn);
+            }
+
+            $ex = new DbException(null, 'fail to get database connection');
             self::writeErrorLog($ex);
             throw $ex;
         }
@@ -270,7 +288,7 @@ final class DB
             throw $err;
         } finally {
             if (!$fromTxManager) {
-                PoolManager::releaseConnection($pdo, $err);
+                PoolManager::releaseConnection($conn, $err);
             }
         }
     }
@@ -299,16 +317,33 @@ final class DB
         }
 
         try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+            list($fromTxManager, $conn) = self::getPdoConnection($txm);
 
-            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+            if ($fromTxManager && $canWriteLog) {
+                $logger->info('DB Context run in transation mode');
+            } else if ($conn instanceof Connection && $canWriteLog) {
                 $logger->info('DB Context run in connection pool mode');
             }
 
             self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
+        }
+
+        if ($conn instanceof Connection) {
+            $pdo = $conn->getPdo();
+        } else {
+            $pdo = $conn;
+        }
+
+        if (!($pdo instanceof PDO)) {
+            if (!$fromTxManager) {
+                PoolManager::releaseConnection($conn);
+            }
+
+            $ex = new DbException(null, 'fail to get database connection');
             self::writeErrorLog($ex);
             throw $ex;
         }
@@ -332,7 +367,7 @@ final class DB
             throw $err;
         } finally {
             if (!$fromTxManager) {
-                PoolManager::releaseConnection($pdo, $err);
+                PoolManager::releaseConnection($conn, $err);
             }
         }
     }
@@ -360,16 +395,33 @@ final class DB
         }
 
         try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+            list($fromTxManager, $conn) = self::getPdoConnection($txm);
 
-            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+            if ($fromTxManager && $canWriteLog) {
+                $logger->info('DB Context run in transation mode');
+            } else if ($conn instanceof Connection && $canWriteLog) {
                 $logger->info('DB Context run in connection pool mode');
             }
 
             self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
+        }
+
+        if ($conn instanceof Connection) {
+            $pdo = $conn->getPdo();
+        } else {
+            $pdo = $conn;
+        }
+
+        if (!($pdo instanceof PDO)) {
+            if (!$fromTxManager) {
+                PoolManager::releaseConnection($conn);
+            }
+
+            $ex = new DbException(null, 'fail to get database connection');
             self::writeErrorLog($ex);
             throw $ex;
         }
@@ -392,7 +444,7 @@ final class DB
             throw $err;
         } finally {
             if (!$fromTxManager) {
-                PoolManager::releaseConnection($pdo, $err);
+                PoolManager::releaseConnection($conn, $err);
             }
         }
     }
@@ -420,16 +472,33 @@ final class DB
         }
 
         try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+            list($fromTxManager, $conn) = self::getPdoConnection($txm);
 
-            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+            if ($fromTxManager && $canWriteLog) {
+                $logger->info('DB Context run in transation mode');
+            } else if ($conn instanceof Connection && $canWriteLog) {
                 $logger->info('DB Context run in connection pool mode');
             }
 
             self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
+        }
+
+        if ($conn instanceof Connection) {
+            $pdo = $conn->getPdo();
+        } else {
+            $pdo = $conn;
+        }
+
+        if (!($pdo instanceof PDO)) {
+            if (!$fromTxManager) {
+                PoolManager::releaseConnection($conn);
+            }
+
+            $ex = new DbException(null, 'fail to get database connection');
             self::writeErrorLog($ex);
             throw $ex;
         }
@@ -456,7 +525,7 @@ final class DB
             throw $err;
         } finally {
             if (!$fromTxManager) {
-                PoolManager::releaseConnection($pdo, $err);
+                PoolManager::releaseConnection($conn, $err);
             }
         }
     }
@@ -484,16 +553,33 @@ final class DB
         }
 
         try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+            list($fromTxManager, $conn) = self::getPdoConnection($txm);
 
-            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+            if ($fromTxManager && $canWriteLog) {
+                $logger->info('DB Context run in transation mode');
+            } else if ($conn instanceof Connection && $canWriteLog) {
                 $logger->info('DB Context run in connection pool mode');
             }
 
             self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
+        }
+
+        if ($conn instanceof Connection) {
+            $pdo = $conn->getPdo();
+        } else {
+            $pdo = $conn;
+        }
+
+        if (!($pdo instanceof PDO)) {
+            if (!$fromTxManager) {
+                PoolManager::releaseConnection($conn);
+            }
+
+            $ex = new DbException(null, 'fail to get database connection');
             self::writeErrorLog($ex);
             throw $ex;
         }
@@ -520,7 +606,7 @@ final class DB
             throw $err;
         } finally {
             if (!$fromTxManager) {
-                PoolManager::releaseConnection($pdo, $err);
+                PoolManager::releaseConnection($conn, $err);
             }
         }
     }
@@ -561,16 +647,33 @@ final class DB
         }
 
         try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+            list($fromTxManager, $conn) = self::getPdoConnection($txm);
 
-            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+            if ($fromTxManager && $canWriteLog) {
+                $logger->info('DB Context run in transation mode');
+            } else if ($conn instanceof Connection && $canWriteLog) {
                 $logger->info('DB Context run in connection pool mode');
             }
 
             self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
+        }
+
+        if ($conn instanceof Connection) {
+            $pdo = $conn->getPdo();
+        } else {
+            $pdo = $conn;
+        }
+
+        if (!($pdo instanceof PDO)) {
+            if (!$fromTxManager) {
+                PoolManager::releaseConnection($conn);
+            }
+
+            $ex = new DbException(null, 'fail to get database connection');
             self::writeErrorLog($ex);
             throw $ex;
         }
@@ -615,7 +718,7 @@ final class DB
             throw $err;
         } finally {
             if (!$fromTxManager) {
-                PoolManager::releaseConnection($pdo, $err);
+                PoolManager::releaseConnection($conn, $err);
             }
         }
     }
@@ -648,16 +751,33 @@ final class DB
         }
 
         try {
-            /* @var PDO $pdo */
-            list($fromTxManager, $pdo) = self::getPdoConnection($txm);
+            list($fromTxManager, $conn) = self::getPdoConnection($txm);
 
-            if (PoolManager::isFromPool($pdo) && $canWriteLog) {
+            if ($fromTxManager && $canWriteLog) {
+                $logger->info('DB Context run in transation mode');
+            } else if ($conn instanceof Connection && $canWriteLog) {
                 $logger->info('DB Context run in connection pool mode');
             }
 
             self::logSql($sql, $params);
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
+            self::writeErrorLog($ex);
+            throw $ex;
+        }
+
+        if ($conn instanceof Connection) {
+            $pdo = $conn->getPdo();
+        } else {
+            $pdo = $conn;
+        }
+
+        if (!($pdo instanceof PDO)) {
+            if (!$fromTxManager) {
+                PoolManager::releaseConnection($conn);
+            }
+
+            $ex = new DbException(null, 'fail to get database connection');
             self::writeErrorLog($ex);
             throw $ex;
         }
@@ -679,7 +799,7 @@ final class DB
             throw $err;
         } finally {
             if (!$fromTxManager) {
-                PoolManager::releaseConnection($pdo, $err);
+                PoolManager::releaseConnection($conn, $err);
             }
         }
     }
@@ -813,16 +933,28 @@ final class DB
         return $ret;
     }
 
-    public static function transations(Closure $callback): void
+    /**
+     * @param Closure $callback
+     * @param int|string|null $timeout
+     */
+    public static function transations(Closure $callback, $timeout = null): void
     {
         if (Swoole::inCoroutineMode(true)) {
-            self::transationsAsync($callback);
+            if (is_string($timeout) && $timeout !== '') {
+                $timeout = Cast::toDuration($timeout);
+            }
+
+            if (!is_int($timeout) || $timeout < 1) {
+                $timeout = 30;
+            }
+
+            self::transationsAsync($callback, $timeout);
             return;
         }
 
         $pdo = ConnectionBuilder::buildPdoConnection();
 
-        if ($pdo === null) {
+        if (!is_object($pdo)) {
             throw new DbException(null, 'fail to get database connection');
         }
 
@@ -843,27 +975,47 @@ final class DB
         }
     }
 
-    private static function transationsAsync(Closure $callback): void
+    private static function transationsAsync(Closure $callback, int $timeout): void
     {
+        $conn = null;
         $pool = PoolManager::getPool('pdo');
 
-        if (!($pool instanceof PoolInterface)) {
+        if ($pool instanceof PoolInterface) {
+            try {
+                $conn = $pool->take();
+            } catch (Throwable $ex) {
+                $conn = null;
+            }
+        }
+
+        if (!is_object($conn)) {
+            $conn = ConnectionBuilder::buildPdoConnection();
+        }
+
+        if (!is_object($conn)) {
             throw new DbException(null, 'fail to get database connection');
         }
 
-        try {
-            $pdo = $pool->take();
-        } catch (Throwable $ex) {
-            throw new DbException(null, $ex->getMessage());
-        }
-
-        $txm = TxManager::create($pdo);
+        $txm = TxManager::create($conn);
         /** @noinspection PhpFullyQualifiedNameUsageInspection */
         $wg = new \Swoole\Coroutine\WaitGroup();
         $wg->add();
 
         try {
-            go(function () use ($callback, $pdo, $txm, $wg) {
+            go(function () use ($callback, $conn, $txm, $wg) {
+                /* @var PDO $pdo */
+                if ($conn instanceof Connection) {
+                    $pdo = $conn->getPdo();
+                } else {
+                    $pdo = $conn;
+                }
+
+                if (!is_object($pdo)) {
+                    PoolManager::releaseConnection($conn);
+                    $wg->done();
+                    return;
+                }
+
                 $err = null;
 
                 try {
@@ -876,12 +1028,12 @@ final class DB
                     self::writeErrorLog($err);
                     throw $err;
                 } finally {
-                    PoolManager::releaseConnection($pdo, $err);
+                    PoolManager::releaseConnection($conn, $err);
                     $wg->done();
                 }
             });
 
-            $wg->wait();
+            $wg->wait(floatval($timeout));
         } catch (Throwable $ex) {
             throw new DbException(null, $ex->getMessage());
         }
@@ -894,13 +1046,13 @@ final class DB
         }
 
         $ex = new DbException(null, "fail to get database connection");
-        $pdo = PoolManager::getConnection('pdo');
+        $conn = PoolManager::getConnection('pdo');
 
-        if (!($pdo instanceof PDO)) {
+        if (!($conn instanceof PDO)) {
             throw $ex;
         }
 
-        return [false, $pdo];
+        return [false, $conn];
     }
 
     private static function pdoBindParams(PDOStatement $stmt, array $params): void
@@ -953,7 +1105,7 @@ final class DB
     {
         $pdo = ConnectionBuilder::buildPdoConnection();
 
-        if ($pdo === null) {
+        if (!is_object($pdo)) {
             return [];
         }
 
@@ -1091,7 +1243,7 @@ final class DB
     {
         $logger = self::$logger;
 
-        if (!($logger instanceof LoggerInterface) || !self::debugLogEnabled()) {
+        if (!is_object($logger) || !self::debugLogEnabled()) {
             return;
         }
 
@@ -1109,7 +1261,7 @@ final class DB
     {
         $logger = self::$logger;
 
-        if (!($logger instanceof LoggerInterface)) {
+        if (!is_object($logger)) {
             return;
         }
 

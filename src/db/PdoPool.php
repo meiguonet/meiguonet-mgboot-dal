@@ -2,10 +2,10 @@
 
 namespace mgboot\dal\db;
 
+use mgboot\dal\Connection;
 use mgboot\dal\ConnectionBuilder;
 use mgboot\dal\pool\PoolInterface;
 use mgboot\dal\pool\PoolTrait;
-use PDO;
 
 final class PdoPool implements PoolInterface
 {
@@ -21,8 +21,14 @@ final class PdoPool implements PoolInterface
         return new self($settings);
     }
 
-    private function newConnection(): ?PDO
+    private function newConnection(): ?Connection
     {
-        return ConnectionBuilder::buildPdoConnection();
+        $pdo = ConnectionBuilder::buildPdoConnection();
+
+        if (!is_object($pdo)) {
+            return null;
+        }
+
+        return Connection::create($this->poolId, $pdo);
     }
 }

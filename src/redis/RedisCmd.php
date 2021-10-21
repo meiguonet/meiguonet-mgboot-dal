@@ -4,6 +4,7 @@ namespace mgboot\dal\redis;
 
 use mgboot\common\Cast;
 use mgboot\common\util\ArrayUtils;
+use mgboot\dal\Connection;
 use mgboot\dal\GobackendSettings;
 use mgboot\dal\pool\PoolManager;
 use mgboot\common\swoole\Swoole;
@@ -1499,10 +1500,21 @@ final class RedisCmd
 
     private static function fromPhpRedis(string $cmd, ?array $args = null)
     {
-        $redis = PoolManager::getConnection('redis');
+        $ex1 = new RuntimeException('RedisCmd: fail to get redis connection');
+        $conn = PoolManager::getConnection('redis');
+
+        if (!is_object($conn)) {
+            throw $ex1;
+        }
+
+        if ($conn instanceof Connection) {
+            $redis = $conn->getRedis();
+        } else {
+            $redis = $conn;
+        }
 
         if (!($redis instanceof Redis)) {
-            throw new RuntimeException('RedisCmd: fail to connect to redis server');
+            throw $ex1;
         }
 
         if (strpos($cmd, '@') !== false) {
@@ -1522,7 +1534,7 @@ final class RedisCmd
         } catch (Throwable $ex) {
             throw new RuntimeException($ex->getMessage());
         } finally {
-            PoolManager::releaseConnection($redis);
+            PoolManager::releaseConnection($conn);
         }
     }
 

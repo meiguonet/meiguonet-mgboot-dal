@@ -3,12 +3,13 @@
 namespace mgboot\dal\pool;
 
 use mgboot\common\Cast;
-use mgboot\common\constant\DateTimeFormat;
 use mgboot\common\constant\Regexp;
 use mgboot\common\swoole\Swoole;
 use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\ArrayUtils;
 use mgboot\common\util\StringUtils;
+use mgboot\dal\Connection;
+use mgboot\dal\ConnectionBuilder;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Throwable;
@@ -103,7 +104,6 @@ trait PoolTrait
             }
 
             $currentActive++;
-            $this->markConnFromPool($conn);
             $ch->push($conn);
         }
 
@@ -146,10 +146,20 @@ trait PoolTrait
 
     public function take($timeout = null)
     {
-        $ex1 = new RuntimeException('fail to take connection from connection pool: ' . get_class($this));
+        $poolType = StringUtils::substringBefore($this->poolId, ':');
+        $conn = null;
+        $ex1 = new RuntimeException("fail to take $poolType connection from connection pool");
 
         if ($this->idleCheckRunning()) {
-            $conn = $this->buildConnectionInternal();
+            switch ($poolType) {
+                case 'pdo':
+                case 'db':
+                    $conn = ConnectionBuilder::buildPdoConnection();
+                    break;
+                case 'redis':
+                    $conn = ConnectionBuilder::buildRedisConnection();
+                    break;
+            }
 
             if (!is_object($conn)) {
                 throw $ex1;
@@ -176,7 +186,6 @@ trait PoolTrait
             $conn = $this->buildConnectionInternal();
 
             if (is_object($conn)) {
-                $this->markConnFromPool($conn);
                 $this->connLastUsedAt($conn, time());
                 $this->updateCurrentActive(1);
                 $this->logTakeSuccess($conn);
@@ -204,7 +213,7 @@ trait PoolTrait
 
     public function release($conn): void
     {
-        if (!is_object($conn)) {
+        if (!is_object($conn) || !($conn instanceof Connection)) {
             return;
         }
 
@@ -214,9 +223,7 @@ trait PoolTrait
             return;
         }
 
-        $poolId = PoolManager::getPoolIdFromConnection($conn);
-
-        if ($poolId !== $this->poolId) {
+        if ($conn->getPoolId() !== $this->poolId) {
             return;
         }
 
@@ -278,15 +285,11 @@ trait PoolTrait
             for ($i = 1; $i <= $this->maxActive; $i++) {
                 $conn = $ch->pop(0.01);
                 
-                if (!is_object($conn)) {
+                if (!is_object($conn) || !($conn instanceof Connection)) {
                     continue;
                 }
-                
-                if (method_exists($conn, 'close')) {
-                    $conn->close();
-                }
 
-                unset($conn);
+                $conn->destroy();
             }
         }
     }
@@ -308,30 +311,21 @@ trait PoolTrait
             while (!$ch->isEmpty()) {
                 $conn = $ch->pop(0.01);
 
-                if (!is_object($conn)) {
+                if (!is_object($conn) || !($conn instanceof Connection)) {
                     continue;
                 }
 
-                $lastUsedAt = $this->connLastUsedAt($conn);
+                $lastUsedAt = $conn->getLastUsedAt();
 
-                if ($lastUsedAt < 1) {
-                    $this->connLastUsedAt($conn, time());
+                if (!is_int($lastUsedAt) || $lastUsedAt < 1) {
+                    $conn->updateLastUsedAt(time());
                     $connections[] = $conn;
                     continue;
                 }
 
                 if ($now - $lastUsedAt >= $this->maxIdleTime) {
                     $this->logWithRemoveEvent($conn);
-
-                    if (method_exists($conn, 'close')) {
-                        try {
-                            $conn->close();
-                        } catch (Throwable $ex) {
-                        }
-
-                        unset($conn);
-                    }
-
+                    $conn->destroy();
                     $this->updateCurrentActive(-1);
                     continue;
                 }
@@ -428,7 +422,7 @@ trait PoolTrait
         return $settings;
     }
 
-    private function buildConnectionInternal()
+    private function buildConnectionInternal(): ?Connection
     {
         if (!method_exists($this, 'newConnection')) {
             return null;
@@ -473,54 +467,24 @@ trait PoolTrait
         return is_array($data) && Cast::toInt($data['idleCheckRunning']) === 1;
     }
 
-    private function markConnFromPool($conn): void
-    {
-        if (!is_object($conn)) {
-            return;
-        }
-
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (!is_object($table)) {
-            return;
-        }
-
-        $key = 'conn:' . spl_object_hash($conn);
-
-        $table->set($key, [
-            'poolId' => $this->poolId,
-            'currentActive' => 0,
-            'idleCheckRunning' => 0,
-            'lastUsedAt' => ''
-        ]);
-    }
-
     private function connLastUsedAt($conn, ?int $timestamp = null): int
     {
-        if (!is_object($conn)) {
+        if (!is_object($conn) || !($conn instanceof Connection)) {
             return 0;
         }
-
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (!is_object($table)) {
-            return 0;
-        }
-
-        $key = 'conn:' . spl_object_hash($conn);
 
         if (is_int($timestamp) && $timestamp > 0) {
-            $table->set($key, ['lastUsedAt' => date(DateTimeFormat::FULL, $timestamp)]);
+            $conn->updateLastUsedAt($timestamp);
             return 0;
         }
 
-        $data = $table->get($key);
-        return is_array($data) && is_string($data['lastUsedAt']) ? strtotime($data['lastUsedAt']) : 0;
+        $ts = $conn->getLastUsedAt();
+        return is_int($ts) ? $ts : 0;
     }
 
     private function logWithRemoveEvent($conn): void
     {
-        if (!$this->inDebugMode() || !is_object($conn)) {
+        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof Connection)) {
             return;
         }
 
@@ -532,13 +496,12 @@ trait PoolTrait
 
         $workerId = Swoole::getWorkerId();
         $poolType = StringUtils::substringBefore($this->poolId, ':');
-        $connectionId = spl_object_hash($conn);
 
         $msg = sprintf(
             '%s%sconnection[%s] has reach the max idle time, remove from pool',
             $workerId >= 0 ? "in worker$workerId, " : '',
             $poolType,
-            $connectionId
+            $conn->getId()
         );
 
         $logger->info($msg);
@@ -546,7 +509,7 @@ trait PoolTrait
 
     private function logTakeSuccess($conn): void
     {
-        if (!$this->inDebugMode() || !is_object($conn)) {
+        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof Connection)) {
             return;
         }
 
@@ -558,13 +521,12 @@ trait PoolTrait
 
         $workerId = Swoole::getWorkerId();
         $poolType = StringUtils::substringBefore($this->poolId, ':');
-        $connectionId = spl_object_hash($conn);
 
         $msg = sprintf(
             '%ssuccess to take %s connection[%s] from pool',
             $workerId >= 0 ? "in worker$workerId, " : '',
             $poolType,
-            $connectionId
+            $conn->getId()
         );
 
         $logger->info($msg);
@@ -596,7 +558,7 @@ trait PoolTrait
 
     private function logReleaseSuccess($conn): void
     {
-        if (!$this->inDebugMode() || !is_object($conn)) {
+        if (!$this->inDebugMode() || !is_object($conn) && !($conn instanceof Connection)) {
             return;
         }
 
@@ -608,13 +570,12 @@ trait PoolTrait
 
         $workerId = Swoole::getWorkerId();
         $poolType = StringUtils::substringBefore($this->poolId, ':');
-        $connectionId = spl_object_hash($conn);
 
         $msg = sprintf(
             '%srelease %s connection[%s] to pool',
             $workerId >= 0 ? "in worker$workerId, " : '',
             $poolType,
-            $connectionId
+            $conn->getId()
         );
 
         $logger->info($msg);

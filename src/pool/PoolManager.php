@@ -2,10 +2,9 @@
 
 namespace mgboot\dal\pool;
 
-use mgboot\common\Cast;
 use mgboot\common\swoole\Swoole;
-use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\StringUtils;
+use mgboot\dal\Connection;
 use mgboot\dal\ConnectionBuilder;
 use Throwable;
 
@@ -92,14 +91,11 @@ final class PoolManager
 
     public static function getPoolIdFromConnection($conn): string
     {
-        if (!is_object($conn)) {
+        if (!is_object($conn) || !($conn instanceof Connection)) {
             return '';
         }
 
-        $tableName = SwooleTable::poolTableName();
-        $key = 'conn:' . spl_object_hash($conn);
-        $data = SwooleTable::getValue($tableName, $key);
-        return is_array($data) ? Cast::toString($data['poolId']) : '';
+        return $conn->getPoolId();
     }
 
     public static function isFromPool($conn): bool
@@ -113,9 +109,7 @@ final class PoolManager
             return;
         }
 
-        $poolId = self::getPoolIdFromConnection($conn);
-
-        if (empty($poolId)) {
+        if (!($conn instanceof Connection)) {
             if (method_exists($conn, 'close')) {
                 try {
                     $conn->close();
@@ -127,6 +121,7 @@ final class PoolManager
             return;
         }
 
+        $poolId = $conn->getPoolId();
         $poolType = StringUtils::substringBefore($poolId, ':');
         $pool = self::getPool($poolType);
 
@@ -142,8 +137,8 @@ final class PoolManager
 
                 if (is_object($logger)) {
                     $workerId = Swoole::getWorkerId();
-                    $connectionId = spl_object_hash($conn);
-                    $logger->info("in worker$workerId, $poolType connection[$connectionId] has gone away, remove from pool");
+                    $id = $conn->getId();
+                    $logger->info("in worker$workerId, $poolType connection[$id] has gone away, remove from pool");
                 }
             }
 
