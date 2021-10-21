@@ -320,6 +320,7 @@ trait PoolTrait
         /** @noinspection PhpFullyQualifiedNameUsageInspection */
         $this->timerId = \Swoole\Timer::tick($this->idleCheckInterval * 1000, function () use ($ch) {
             $this->idleCheckRunning(true);
+            $this->logIdleCheckStart();
             $now = time();
             $connections = [];
 
@@ -516,6 +517,26 @@ trait PoolTrait
 
         $ts = $conn->getLastUsedAt();
         return is_int($ts) ? $ts : 0;
+    }
+
+    private function logIdleCheckStart(): void
+    {
+        $logger = $this->logger;
+
+        if (!is_object($logger) || !$this->inDebugMode()) {
+            return;
+        }
+
+        $workerId = Swoole::getWorkerId();
+        $poolType = StringUtils::substringBefore($this->poolId, ':');
+
+        $msg = sprintf(
+            '%s%spool start idle connection check...',
+            $workerId >= 0 ? "in worker$workerId, " : '',
+            $poolType
+        );
+
+        $logger->info($msg);
     }
 
     private function logWithRemoveEvent($conn): void
