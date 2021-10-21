@@ -1048,7 +1048,7 @@ final class DB
         $ex = new DbException(null, "fail to get database connection");
         $conn = PoolManager::getConnection('pdo');
 
-        if (!($conn instanceof PDO)) {
+        if (!is_object($conn)) {
             throw $ex;
         }
 
