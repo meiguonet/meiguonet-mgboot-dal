@@ -120,6 +120,27 @@ trait PoolTrait
             ]);
         }
 
+        $logger = $this->logger;
+
+        if (is_object($logger) && $this->inDebugMode()) {
+            $workerId = Swoole::getWorkerId();
+            $poolType = StringUtils::substringBefore($this->poolId, ':');
+
+            $msg = sprintf(
+                'in worker%d, %s pool[minActive=%d, maxActive=%d, currentActive=%d, takeTimeout=%ds, maxIdleTime=%ds, idleCheckInterval=%ds] is running',
+                $workerId,
+                $poolType,
+                $this->minActive,
+                $this->maxActive,
+                $currentActive,
+                $this->takeTimeout,
+                $this->maxIdleTime,
+                $this->idleCheckInterval
+            );
+
+            $logger->info($msg);
+        }
+
         $this->runIdleChecker();
     }
 
