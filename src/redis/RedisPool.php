@@ -2,10 +2,10 @@
 
 namespace mgboot\dal\redis;
 
-use mgboot\dal\Connection;
-use mgboot\dal\ConnectionBuilder;
 use mgboot\dal\pool\PoolInterface;
 use mgboot\dal\pool\PoolTrait;
+use Redis;
+use Throwable;
 
 final class RedisPool implements PoolInterface
 {
@@ -21,14 +21,14 @@ final class RedisPool implements PoolInterface
         return new self($settings);
     }
 
-    private function newConnection(): ?Connection
+    private function newConnection(): ?Redis
     {
-        $redis = ConnectionBuilder::buildRedisConnection();
-
-        if (!is_object($redis)) {
-            return null;
+        try {
+            $redis = RedisConnection::create($this->poolId, RedisCmd::getRedisConfig());
+        } catch (Throwable $ex) {
+            $redis = null;
         }
 
-        return Connection::create($this->poolId, $redis);
+        return $redis instanceof Redis ? $redis : null;
     }
 }

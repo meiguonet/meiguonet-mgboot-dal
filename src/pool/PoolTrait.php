@@ -8,9 +8,10 @@ use mgboot\common\swoole\Swoole;
 use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\ArrayUtils;
 use mgboot\common\util\StringUtils;
-use mgboot\dal\Connection;
 use mgboot\dal\ConnectionBuilder;
+use mgboot\dal\ConnectionInterface;
 use Psr\Log\LoggerInterface;
+use Redis;
 use RuntimeException;
 use Throwable;
 
@@ -218,7 +219,7 @@ trait PoolTrait
 
     public function release($conn): void
     {
-        if (!is_object($conn) || !($conn instanceof Connection)) {
+        if (!is_object($conn) || !($conn instanceof ConnectionInterface)) {
             return;
         }
 
@@ -294,11 +295,15 @@ trait PoolTrait
             for ($i = 1; $i <= $this->maxActive; $i++) {
                 $conn = $ch->pop(0.01);
                 
-                if (!is_object($conn) || !($conn instanceof Connection)) {
+                if (!is_object($conn)) {
                     continue;
                 }
 
-                $conn->destroy();
+                if ($conn instanceof Redis) {
+                    $conn->close();
+                }
+
+                unset($conn);
             }
 
             /** @noinspection PhpFullyQualifiedNameUsageInspection */
@@ -332,7 +337,7 @@ trait PoolTrait
                 for ($i = 1; $i <= $this->maxActive; $i++) {
                     $conn = $ch->pop(0.01);
 
-                    if (!is_object($conn) || !($conn instanceof Connection)) {
+                    if (!is_object($conn) || !($conn instanceof ConnectionInterface)) {
                         continue;
                     }
 
@@ -345,9 +350,14 @@ trait PoolTrait
                     }
 
                     if ($now - $lastUsedAt >= $this->maxIdleTime) {
-                        $conn->destroy();
                         $this->updateCurrentActive(-1);
                         $this->logWithRemoveEvent($conn);
+
+                        if ($conn instanceof Redis) {
+                            $conn->close();
+                        }
+
+                        unset($conn);
                         continue;
                     }
 
@@ -447,17 +457,19 @@ trait PoolTrait
         return $settings;
     }
 
-    private function buildConnectionInternal(): ?Connection
+    private function buildConnectionInternal(): ?ConnectionInterface
     {
         if (!method_exists($this, 'newConnection')) {
             return null;
         }
 
         try {
-            return $this->newConnection();
+            $conn = $this->newConnection();
         } catch (Throwable $ex) {
-            return null;
+            $conn = null;
         }
+
+        return $conn instanceof ConnectionInterface ? $conn : null;
     }
 
     private function getCurrentActive(): int
@@ -506,7 +518,7 @@ trait PoolTrait
 
     private function connLastUsedAt($conn, ?int $timestamp = null): int
     {
-        if (!is_object($conn) || !($conn instanceof Connection)) {
+        if (!is_object($conn) || !($conn instanceof ConnectionInterface)) {
             return 0;
         }
 
@@ -541,7 +553,7 @@ trait PoolTrait
 
     private function logWithRemoveEvent($conn): void
     {
-        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof Connection)) {
+        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof ConnectionInterface)) {
             return;
         }
 
@@ -555,10 +567,10 @@ trait PoolTrait
         $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
-            '%s%sconnection[%s] has reach the max idle time, remove from pool, pool stats: [currentActive=%d, idleCount=%d]',
+            '%s%s connection[%s] has reach the max idle time, remove from pool, pool stats: [currentActive=%d, idleCount=%d]',
             $workerId >= 0 ? "in worker$workerId, " : '',
             $poolType,
-            $conn->getId(),
+            $conn->getConnectionId(),
             $this->getCurrentActive(),
             $this->getIdleCount()
         );
@@ -568,7 +580,7 @@ trait PoolTrait
 
     private function logTakeSuccess($conn): void
     {
-        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof Connection)) {
+        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof ConnectionInterface)) {
             return;
         }
 
@@ -585,7 +597,7 @@ trait PoolTrait
             '%ssuccess to take %s connection[%s] from pool, pool stats: [currentActive=%d, idleCount=%d]',
             $workerId >= 0 ? "in worker$workerId, " : '',
             $poolType,
-            $conn->getId(),
+            $conn->getConnectionId(),
             $this->getCurrentActive(),
             $this->getIdleCount()
         );
@@ -619,7 +631,7 @@ trait PoolTrait
 
     private function logReleaseSuccess($conn): void
     {
-        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof Connection)) {
+        if (!$this->inDebugMode() || !is_object($conn) || !($conn instanceof ConnectionInterface)) {
             return;
         }
 
@@ -636,7 +648,7 @@ trait PoolTrait
             '%srelease %s connection[%s] to pool, pool stats: [currentActive=%d, idleCount=%d]',
             $workerId >= 0 ? "in worker$workerId, " : '',
             $poolType,
-            $conn->getId(),
+            $conn->getConnectionId(),
             $this->getCurrentActive(),
             $this->getIdleCount()
         );

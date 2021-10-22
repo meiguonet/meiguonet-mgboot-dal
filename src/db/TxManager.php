@@ -2,7 +2,6 @@
 
 namespace mgboot\dal\db;
 
-use mgboot\dal\Connection;
 use PDO;
 
 final class TxManager
@@ -12,38 +11,14 @@ final class TxManager
      */
     private $pdo;
 
-    private function __construct($conn)
+    private function __construct(PDO $pdo)
     {
-        $msg = sprintf(
-            'TxManager constructor arg0 require a PDO object or a %s object with a PDO object as real connection',
-            Connection::class
-        );
-
-        if (!is_object($conn)) {
-            throw new DbException(null, $msg);
-        }
-
-        if ($conn instanceof Connection) {
-            $pdo = $conn->getPdo();
-
-            if (!is_object($pdo)) {
-                throw new DbException(null, $msg);
-            }
-
-            $this->pdo = $pdo;
-            return;
-        }
-
-        if (!($conn instanceof PDO)) {
-            throw new DbException(null, $msg);
-        }
-
-        $this->pdo = $conn;
+        $this->pdo = $pdo;
     }
 
-    public static function create($conn): self
+    public static function create(PDO $pdo): self
     {
-        return new self($conn);
+        return new self($pdo);
     }
 
     public function getPdo(): PDO

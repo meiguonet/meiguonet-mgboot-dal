@@ -4,8 +4,8 @@ namespace mgboot\dal\pool;
 
 use mgboot\common\swoole\Swoole;
 use mgboot\common\util\StringUtils;
-use mgboot\dal\Connection;
 use mgboot\dal\ConnectionBuilder;
+use mgboot\dal\ConnectionInterface;
 use Throwable;
 
 final class PoolManager
@@ -91,7 +91,7 @@ final class PoolManager
 
     public static function getPoolIdFromConnection($conn): string
     {
-        if (!is_object($conn) || !($conn instanceof Connection)) {
+        if (!is_object($conn) || !($conn instanceof ConnectionInterface)) {
             return '';
         }
 
@@ -109,7 +109,7 @@ final class PoolManager
             return;
         }
 
-        if (!($conn instanceof Connection)) {
+        if (!($conn instanceof ConnectionInterface)) {
             if (method_exists($conn, 'close')) {
                 try {
                     $conn->close();
@@ -137,7 +137,7 @@ final class PoolManager
 
                 if (is_object($logger)) {
                     $workerId = Swoole::getWorkerId();
-                    $id = $conn->getId();
+                    $id = $conn->getConnectionId();
                     $logger->info("in worker$workerId, $poolType connection[$id] has gone away, remove from pool");
                 }
             }

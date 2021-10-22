@@ -15,8 +15,8 @@
     }
   },
   "require": {
-    "php": ">=7.2.0",
-    "meiguonet/meiguonet-mgboot-common": "^1.0.7",
+    "php": ">=7.3.0",
+    "meiguonet/meiguonet-mgboot-common": "^1.0.0",
     "psr/log": "^1.1.4"
   }
 }
