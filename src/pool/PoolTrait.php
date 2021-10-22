@@ -30,7 +30,7 @@ trait PoolTrait
     /**
      * @var string
      */
-    private $poolId = '';
+    private $poolId;
 
     /**
      * @var int
@@ -56,17 +56,6 @@ trait PoolTrait
      * @var int
      */
     private $idleCheckInterval = 10;
-
-    /**
-     * @var \Swoole\Coroutine\Channel|null
-     * @noinspection PhpFullyQualifiedNameUsageInspection
-     */
-    private $connChan = null;
-
-    /**
-     * @var int|null
-     */
-    private $timerId = null;
 
     public function inDebugMode(?bool $flag = null): bool
     {
@@ -96,10 +85,21 @@ trait PoolTrait
         return $this->poolId;
     }
 
+    public function getPoolType(): string
+    {
+        return StringUtils::substringBefore($this->poolId, ':');
+    }
+
     public function run(): void
     {
-        /** @noinspection PhpFullyQualifiedNameUsageInspection */
-        $ch = new \Swoole\Coroutine\Channel($this->maxActive);
+        $workerId = Swoole::getWorkerId();
+        $poolType = $this->getPoolType();
+        $ch = PoolManager::getPoolChan($poolType, $workerId);
+
+        if (!is_object($ch)) {
+            return;
+        }
+
         $currentActive = 0;
 
         for ($i = 1; $i <= $this->minActive; $i++) {
@@ -113,25 +113,21 @@ trait PoolTrait
             $ch->push($conn);
         }
 
-        $this->connChan = $ch;
-        $key = $this->poolId;
+        $key = "{$poolType}Pool$workerId";
         $table = SwooleTable::getTable(SwooleTable::poolTableName());
 
         if (is_object($table)) {
             $table->set($key, [
-                'poolId' => '',
+                'maxActive' => $this->maxActive,
                 'currentActive' => $currentActive,
                 'idleCheckRunning' => 0,
-                'lastUsedAt' => ''
+                'closed' => 0
             ]);
         }
 
         $logger = $this->logger;
 
         if (is_object($logger) && $this->inDebugMode()) {
-            $workerId = Swoole::getWorkerId();
-            $poolType = StringUtils::substringBefore($this->poolId, ':');
-
             $msg = sprintf(
                 'in worker%d, %s pool[minActive=%d, maxActive=%d, currentActive=%d, takeTimeout=%ds, maxIdleTime=%ds, idleCheckInterval=%ds] is running',
                 $workerId,
@@ -147,16 +143,17 @@ trait PoolTrait
             $logger->info($msg);
         }
 
-        $this->runIdleChecker();
+        $this->runIdleChecker($ch);
     }
 
     public function take($timeout = null)
     {
-        $poolType = StringUtils::substringBefore($this->poolId, ':');
+        $workerId = Swoole::getWorkerId();
+        $poolType = $this->getPoolType();
         $conn = null;
         $ex1 = new RuntimeException("fail to take $poolType connection from connection pool");
 
-        if ($this->idleCheckRunning()) {
+        if ($this->closed() || $this->idleCheckRunning()) {
             switch ($poolType) {
                 case 'pdo':
                 case 'db':
@@ -174,7 +171,7 @@ trait PoolTrait
             return $conn;
         }
 
-        $ch = $this->connChan;
+        $ch = PoolManager::getPoolChan($poolType, $workerId);
 
         if (!is_object($ch)) {
             throw $ex1;
@@ -223,7 +220,7 @@ trait PoolTrait
             return;
         }
 
-        $ch = $this->connChan;
+        $ch = PoolManager::getPoolChan($this->getPoolType());
 
         if (!is_object($ch)) {
             return;
@@ -245,7 +242,7 @@ trait PoolTrait
             return;
         }
 
-        $key = $this->poolId;
+        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
 
         if ($num > 0) {
             $table->incr($key, 'currentActive', $num);
@@ -261,69 +258,11 @@ trait PoolTrait
         }
     }
 
-    public function destroy($timeout = null): void
+    /** @noinspection PhpFullyQualifiedNameUsageInspection */
+    private function runIdleChecker(\Swoole\Coroutine\Channel $ch): void
     {
-        $this->idleCheckRunning(true);
-        $timerId = $this->timerId;
-
-        if (is_int($timerId)) {
-            /** @noinspection PhpFullyQualifiedNameUsageInspection */
-            \Swoole\Timer::clear($timerId);
-        }
-
-        $ch = $this->connChan;
-
-        if (!is_object($ch)) {
-            return;
-        }
-
-        if (is_string($timeout) && $timeout !== '') {
-            $timeout = Cast::toDuration($timeout);
-        }
-
-        if (!is_int($timeout) || $timeout < 1) {
-            $timeout = 5;
-        }
-
-        $now = time();
-
-        while (true) {
-            if (time() - $now > $timeout) {
-                break;
-            }
-
-            for ($i = 1; $i <= $this->maxActive; $i++) {
-                $conn = $ch->pop(0.01);
-                
-                if (!is_object($conn)) {
-                    continue;
-                }
-
-                if ($conn instanceof Redis) {
-                    $conn->close();
-                }
-
-                unset($conn);
-            }
-
-            /** @noinspection PhpFullyQualifiedNameUsageInspection */
-            \Swoole\Coroutine::sleep(0.05);
-        }
-
-        $ch->close();
-        unset($ch, $this->connChan);
-    }
-
-    private function runIdleChecker(): void
-    {
-        $ch = $this->connChan;
-
-        if (!is_object($ch)) {
-            return;
-        }
-
         /** @noinspection PhpFullyQualifiedNameUsageInspection */
-        $this->timerId = \Swoole\Timer::tick($this->idleCheckInterval * 1000, function () use ($ch) {
+        \Swoole\Timer::tick($this->idleCheckInterval * 1000, function () use ($ch) {
             $this->idleCheckRunning(true);
             $this->logIdleCheckStart();
             $now = time();
@@ -480,14 +419,14 @@ trait PoolTrait
             return 0;
         }
 
-        $key = $this->poolId;
-        $data = $table->get($key);
-        return is_array($data) ? Cast::toInt($data['currentActive'], 0) : 0;
+        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
+        $entry = $table->get($key);
+        return is_array($entry) ? Cast::toInt($entry['currentActive'], 0) : 0;
     }
 
     private function getIdleCount(): int
     {
-        $ch = $this->connChan;
+        $ch = PoolManager::getPoolChan($this->getPoolType());
 
         if (!is_object($ch)) {
             return 0;
@@ -505,15 +444,34 @@ trait PoolTrait
             return false;
         }
 
-        $key = $this->poolId;
+        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
 
         if (is_bool($flag)) {
             $table->set($key, ['idleCheckRunning' => $flag === true ? 1 : 0]);
             return false;
         }
 
-        $data = $table->get($key);
-        return is_array($data) && Cast::toInt($data['idleCheckRunning']) === 1;
+        $entry = $table->get($key);
+        return is_array($entry) && Cast::toInt($entry['idleCheckRunning']) === 1;
+    }
+
+    private function closed(?bool $flag = null): bool
+    {
+        $table = SwooleTable::getTable(SwooleTable::poolTableName());
+
+        if (!is_object($table)) {
+            return false;
+        }
+
+        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
+
+        if (is_bool($flag)) {
+            $table->set($key, ['closed' => $flag === true ? 1 : 0]);
+            return false;
+        }
+
+        $entry = $table->get($key);
+        return is_array($entry) && Cast::toInt($entry['closed']) === 1;
     }
 
     private function connLastUsedAt($conn, ?int $timestamp = null): int
@@ -540,12 +498,11 @@ trait PoolTrait
         }
 
         $workerId = Swoole::getWorkerId();
-        $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
             '%s%s pool start idle connection check...',
             $workerId >= 0 ? "in worker$workerId, " : '',
-            $poolType
+            $this->getPoolType()
         );
 
         $logger->info($msg);
@@ -564,12 +521,11 @@ trait PoolTrait
         }
 
         $workerId = Swoole::getWorkerId();
-        $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
             '%s%s connection[%s] has reach the max idle time, remove from pool, pool stats: [currentActive=%d, idleCount=%d]',
             $workerId >= 0 ? "in worker$workerId, " : '',
-            $poolType,
+            $this->getPoolType(),
             $conn->getConnectionId(),
             $this->getCurrentActive(),
             $this->getIdleCount()
@@ -591,12 +547,11 @@ trait PoolTrait
         }
 
         $workerId = Swoole::getWorkerId();
-        $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
             '%ssuccess to take %s connection[%s] from pool, pool stats: [currentActive=%d, idleCount=%d]',
             $workerId >= 0 ? "in worker$workerId, " : '',
-            $poolType,
+            $this->getPoolType(),
             $conn->getConnectionId(),
             $this->getCurrentActive(),
             $this->getIdleCount()
@@ -618,12 +573,11 @@ trait PoolTrait
         }
 
         $workerId = Swoole::getWorkerId();
-        $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
             '%sfail to take %s connection from pool',
             $workerId >= 0 ? "in worker$workerId, " : '',
-            $poolType
+            $this->getPoolType()
         );
 
         $logger->info($msg);
@@ -642,12 +596,11 @@ trait PoolTrait
         }
 
         $workerId = Swoole::getWorkerId();
-        $poolType = StringUtils::substringBefore($this->poolId, ':');
 
         $msg = sprintf(
             '%srelease %s connection[%s] to pool, pool stats: [currentActive=%d, idleCount=%d]',
             $workerId >= 0 ? "in worker$workerId, " : '',
-            $poolType,
+            $this->getPoolType(),
             $conn->getConnectionId(),
             $this->getCurrentActive(),
             $this->getIdleCount()

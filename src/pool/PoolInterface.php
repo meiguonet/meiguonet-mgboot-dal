@@ -14,6 +14,8 @@ interface PoolInterface
 
     public function getPoolId(): string;
 
+    public function getPoolType(): string;
+
     public function run(): void;
 
     /**
@@ -25,9 +27,4 @@ interface PoolInterface
     public function release($conn): void;
 
     public function updateCurrentActive(int $num): void;
-
-    /**
-     * @param int|string|null $timeout
-     */
-    public function destroy($timeout = null): void;
 }
