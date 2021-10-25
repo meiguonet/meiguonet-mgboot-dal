@@ -2,13 +2,10 @@
 
 namespace mgboot\dal\pool;
 
-use mgboot\common\Cast;
 use mgboot\common\swoole\Swoole;
-use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\StringUtils;
 use mgboot\dal\ConnectionBuilder;
 use mgboot\dal\ConnectionInterface;
-use Redis;
 use Throwable;
 
 final class PoolManager
@@ -17,6 +14,11 @@ final class PoolManager
      * @var array
      */
     private static $pools = [];
+
+    /**
+     * @var PoolInfo[]
+     */
+    private static $poolInfoList = [];
 
     private function __construct()
     {
@@ -50,30 +52,18 @@ final class PoolManager
         return $pool instanceof PoolInterface ? $pool : null;
     }
 
-    /** @noinspection PhpFullyQualifiedNameUsageInspection */
-    public static function getPoolChan(string $poolType, ?int $workerId = null): ?\Swoole\Coroutine\Channel
+    public static function withPoolInfo(PoolInfo $poolInfo): void
     {
-        $server = Swoole::getServer();
+        self::$poolInfoList[] = $poolInfo;
+    }
 
-        if (!is_object($server)) {
+    public static function getPoolInfo(int $workerId): ?PoolInfo
+    {
+        if ($workerId < 0 || $workerId > count(self::$poolInfoList) - 1) {
             return null;
         }
 
-        if (!is_int($workerId)) {
-            $workerId = Swoole::getWorkerId();
-        }
-
-        if (!is_int($workerId) || $workerId < 0) {
-            return null;
-        }
-
-        $pn = "{$poolType}Chan$workerId";
-
-        if (!property_exists($server, $pn)) {
-            return null;
-        }
-
-        return $server->$pn;
+        return self::$poolInfoList[$workerId];
     }
 
     public static function getConnection(string $connectionType)
@@ -179,68 +169,12 @@ final class PoolManager
 
     public static function destroyPool(string $poolType, ?int $workerId = null, $timeout = null): void
     {
-        if (!is_int($workerId)) {
-            $workerId = Swoole::getWorkerId();
-        }
+        $pool = self::getPool($poolType, $workerId);
 
-        if (!is_int($workerId) || $workerId < 0) {
+        if (!is_object($pool)) {
             return;
         }
 
-        $ch = self::getPoolChan($poolType, $workerId);
-
-        if (!is_object($ch)) {
-            return;
-        }
-
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (!is_object($table)) {
-            return;
-        }
-
-        $key = "{$poolType}Pool$workerId";
-        $table->set($key, ['closed' => 1]);
-        $entry = $table->get($key);
-        $maxActive = is_array($entry) && is_int($entry['maxActive']) ? $entry['maxActive'] : 0;
-
-        if ($maxActive < 1) {
-            return;
-        }
-
-        if (is_string($timeout) && $timeout !== '') {
-            $timeout = Cast::toDuration($timeout);
-        }
-
-        if (!is_int($timeout) || $timeout < 1) {
-            $timeout = 5;
-        }
-
-        $now = time();
-
-        while (true) {
-            if (time() - $now > $timeout) {
-                break;
-            }
-
-            for ($i = 1; $i <= $maxActive; $i++) {
-                $conn = $ch->pop(0.01);
-
-                if (!is_object($conn)) {
-                    continue;
-                }
-
-                if ($conn instanceof Redis) {
-                    $conn->close();
-                }
-
-                unset($conn);
-            }
-
-            /** @noinspection PhpFullyQualifiedNameUsageInspection */
-            \Swoole\Coroutine::sleep(0.05);
-        }
-
-        $ch->close();
+        $pool->destroy($timeout);
     }
 }

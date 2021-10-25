@@ -2,8 +2,15 @@
 
 namespace mgboot\dal\db;
 
+use mgboot\common\swoole\Swoole;
+
 final class DbConfig
 {
+    /**
+     * @var array
+     */
+    private static $map1 = [];
+
     /**
      * @var bool
      */
@@ -95,6 +102,37 @@ final class DbConfig
         }
 
         return new self($settings);
+    }
+
+    public static function withConfig(DbConfig $cfg, ?int $workerId = null): void
+    {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "worker$workerId";
+        } else {
+            $key = 'noworker';
+        }
+
+        self::$map1[$key] = $cfg;
+    }
+
+    public static function loadCurrent(?int $workerId = null): ?DbConfig
+    {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "worker$workerId";
+        } else {
+            $key = 'noworker';
+        }
+
+        $cfg = self::$map1[$key];
+        return $cfg instanceof DbConfig ? $cfg : null;
     }
 
     /**

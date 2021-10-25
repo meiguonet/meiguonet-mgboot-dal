@@ -3,9 +3,15 @@
 namespace mgboot\dal\redis;
 
 use mgboot\common\Cast;
+use mgboot\common\swoole\Swoole;
 
 final class RedisConfig
 {
+    /**
+     * @var array
+     */
+    private static $map1 = [];
+
     /**
      * @var bool
      */
@@ -90,6 +96,37 @@ final class RedisConfig
         }
 
         return new self($settings);
+    }
+
+    public static function withConfig(RedisConfig $cfg, ?int $workerId = null): void
+    {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "worker$workerId";
+        } else {
+            $key = 'noworker';
+        }
+
+        self::$map1[$key] = $cfg;
+    }
+
+    public static function loadCurrent(?int $workerId = null): ?RedisConfig
+    {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "worker$workerId";
+        } else {
+            $key = 'noworker';
+        }
+
+        $cfg = self::$map1[$key];
+        return $cfg instanceof RedisConfig ? $cfg : null;
     }
 
     /**

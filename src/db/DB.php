@@ -8,8 +8,6 @@ use mgboot\common\AppConf;
 use mgboot\common\Cast;
 use mgboot\common\constant\Regexp;
 use mgboot\common\swoole\Swoole;
-use mgboot\common\swoole\SwooleTable;
-use mgboot\common\util\ArrayUtils;
 use mgboot\common\util\ExceptionUtils;
 use mgboot\common\util\FileUtils;
 use mgboot\common\util\JsonUtils;
@@ -27,87 +25,124 @@ use Throwable;
 final class DB
 {
     /**
-     * @var LoggerInterface|null
+     * @var array
      */
-    private static $logger = null;
-
-    /**
-     * @var bool
-     */
-    private static $_debugLogEnabled = false;
-
-    /**
-     * @var DbConfig|null
-     */
-    private static $dbConfig = null;
-
-    /**
-     * @var GobackendSettings|null
-     */
-    private static $gobackendSettings = null;
-
-    /**
-     * @var string
-     */
-    private static $cacheDir = 'classpath:cache';
-
-    /**
-     * @var string
-     */
-    private static $cacheKeyTableSchemas = 'tableSchemas';
+    private static $map1 = [];
 
     private function __construct()
     {
     }
 
-    public static function withLogger(LoggerInterface $logger): void
+    public static function withLogger(LoggerInterface $logger, ?int $workerId = null): void
     {
-        self::$logger = $logger;
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "loggerWorker$workerId";
+        } else {
+            $key = 'loggerNoworker';
+        }
+
+        self::$map1[$key] = $logger;
     }
 
-    public static function debugLogEnabled(?bool $flag = null): bool
+    private static function getLogger(?int $workerId = null): ?LoggerInterface
     {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "loggerWorker$workerId";
+        } else {
+            $key = 'loggerNoworker';
+        }
+
+        $logger = self::$map1[$key];
+        return $logger instanceof LoggerInterface ? $logger : null;
+    }
+
+    public static function debugLogEnabled(?bool $flag = null, ?int $workerId = null): bool
+    {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "debugLogEnabledWorker$workerId";
+        } else {
+            $key = 'debugLogEnabledNoworker';
+        }
+
         if (is_bool($flag)) {
-            self::$_debugLogEnabled = $flag === true;
+            self::$map1[$key] = $flag;
             return false;
         }
 
-        return self::$_debugLogEnabled;
+        return self::$map1[$key] === true;
     }
 
-    public static function withDbConfig(array $settings): void
+    public static function gobackendEnabled(?bool $flag = null, ?int $workerId = null): bool
     {
-        self::$dbConfig = DbConfig::create($settings);
-    }
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
 
-    public static function getDbConfig(): DbConfig
-    {
-        $cfg = self::$dbConfig;
-        return $cfg instanceof DbConfig ? $cfg : DbConfig::create();
-    }
+            $key = "gobackendEnabledWorker$workerId";
+        } else {
+            $key = 'gobackendEnabledNoworker';
+        }
 
-    public static function gobackendEnabled(?array $settings = null): bool
-    {
-        if (ArrayUtils::isAssocArray($settings)) {
-            self::$gobackendSettings = GobackendSettings::create($settings);
+        if (is_bool($flag)) {
+            self::$map1[$key] = $flag;
             return false;
         }
 
-        $settings = self::$gobackendSettings;
-        return $settings instanceof GobackendSettings && $settings->isEnabled();
-    }
-
-    public static function getGobackendSettings(): GobackendSettings
-    {
-        $settings = self::$gobackendSettings;
-        return $settings instanceof GobackendSettings ? $settings : GobackendSettings::create();
-    }
-
-    public static function withCacheDir(string $dir): void
-    {
-        if ($dir !== '' && is_dir($dir) && is_writable($dir)) {
-            self::$cacheDir = $dir;
+        if (self::$map1[$key] !== true) {
+            return false;
         }
+
+        $settings = GobackendSettings::loadCurrent($workerId);
+        return $settings instanceof GobackendSettings && !$settings->isEnabled();
+    }
+
+    public static function withTableSchemasCacheFilepath(string $fpath, ?int $workerId = null): void
+    {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "tableSchemasCacheFilepathWorker$workerId";
+        } else {
+            $key = 'tableSchemasCacheFilepathNoworker';
+        }
+        
+        self::$map1[$key] = FileUtils::getRealpath($fpath);
+    }
+    
+    private static function getTableSchemasCacheFilepath(?int $workerId = null): string
+    {
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
+
+            $key = "tableSchemasCacheFilepathWorker$workerId";
+        } else {
+            $key = 'tableSchemasCacheFilepathNoworker';
+        }
+        
+        $fpath = self::$map1[$key];
+        
+        if (!is_string($fpath) || $fpath === '') {
+            $fpath = FileUtils::getRealpath('classpath:cache/table_schemas.php');
+        }
+        
+        return $fpath;
     }
 
     public static function buildTableSchemas(): void
@@ -122,23 +157,14 @@ final class DB
             if (empty($schemas)) {
                 return;
             }
-
-            $table = SwooleTable::getTable(SwooleTable::cacheTableName());
-
-            if (!is_object($table)) {
-                return;
-            }
-
-            $table->set(self::$cacheKeyTableSchemas, [
-                'value' => JsonUtils::toJson($schemas),
-                'expiry' => 0
-            ]);
-
+            
+            $workerId = Swoole::getWorkerId();
+            $key = "tableSchemasWorker$workerId";
+            self::$map1[$key] = $schemas;
             return;
         }
 
-        $cacheFile = rtrim(self::$cacheDir, '/') . '/table_schemas.php';
-        $cacheFile = FileUtils::getRealpath($cacheFile);
+        $cacheFile = self::getTableSchemasCacheFilepath();
 
         if (is_file($cacheFile)) {
             try {
@@ -162,24 +188,13 @@ final class DB
         }
 
         if (is_object(Swoole::getServer())) {
-            $table = SwooleTable::getTable(SwooleTable::cacheTableName());
-
-            if (!is_object($table)) {
-                return [];
-            }
-
-            $entry = $table->get(self::$cacheKeyTableSchemas);
-
-            if (!is_array($entry) || !is_string($entry['value'])) {
-                return [];
-            }
-
-            $schemas = JsonUtils::mapFrom($entry['value']);
+            $workerId = Swoole::getWorkerId();
+            $key = "tableSchemasWorker$workerId";
+            $schemas = self::$map1[$key];
             return is_array($schemas) ? $schemas : [];
         }
 
-        $cacheFile = rtrim(self::$cacheDir, '/') . '/table_schemas.php';
-        $cacheFile = FileUtils::getRealpath($cacheFile);
+        $cacheFile = self::getTableSchemasCacheFilepath();
 
         if (!is_file($cacheFile)) {
             return [];
@@ -218,7 +233,7 @@ final class DB
 
     public static function selectBySql(string $sql, array $params = [], ?TxManager $txm = null): Collection
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
         $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
@@ -280,7 +295,7 @@ final class DB
 
     public static function firstBySql(string $sql, array $params = [], ?TxManager $txm = null): ?array
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
         $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
@@ -344,7 +359,7 @@ final class DB
 
     public static function countBySql(string $sql, array $params = [], ?TxManager $txm = null): int
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
         $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
@@ -406,7 +421,7 @@ final class DB
 
     public static function insertBySql(string $sql, array $params = [], ?TxManager $txm = null): int
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
         $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
@@ -472,7 +487,7 @@ final class DB
 
     public static function updateBySql(string $sql, array $params = [], ?TxManager $txm = null): int
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
         $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
@@ -544,7 +559,7 @@ final class DB
      */
     public static function sumBySql(string $sql, array $params = [], ?TxManager $txm = null)
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
         $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
@@ -640,7 +655,7 @@ final class DB
 
     public static function executeSql(string $sql, array $params = [], ?TxManager $txm = null): void
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
         $canWriteLog = self::debugLogEnabled() && $logger instanceof LoggerInterface;
 
         if (self::gobackendEnabled()) {
@@ -701,7 +716,7 @@ final class DB
 
     private static function fromGobackend(string $cmd, string $query, array $params): array
     {
-        $cfg = self::getGobackendSettings();
+        $cfg = GobackendSettings::loadCurrent();
 
         if (!$cfg->isEnabled()) {
             return ['', 'fail to load gobackend settings'];
@@ -1093,7 +1108,21 @@ final class DB
             return;
         }
 
-        $cacheFile = rtrim(self::$cacheDir, '/') . '/table_schemas.php';
+        $cacheFile = self::getTableSchemasCacheFilepath();
+        $dir = dirname($cacheFile);
+        
+        if (!is_string($dir) || $dir === '') {
+            return;
+        }
+        
+        if (!is_dir($dir)) {
+            mkdir($dir, 0644, true);
+        }
+        
+        if (!is_dir($dir) || !is_writable($dir)) {
+            return;
+        }
+        
         $cacheFile = FileUtils::getRealpath($cacheFile);
         $fp = fopen($cacheFile, 'w');
 
@@ -1123,7 +1152,7 @@ final class DB
 
     private static function logSql(string $sql, ?array $params = null): void
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
 
         if (!is_object($logger) || !self::debugLogEnabled()) {
             return;
@@ -1141,7 +1170,7 @@ final class DB
      */
     private static function writeErrorLog($msg): void
     {
-        $logger = self::$logger;
+        $logger = self::getLogger();
 
         if (!is_object($logger)) {
             return;

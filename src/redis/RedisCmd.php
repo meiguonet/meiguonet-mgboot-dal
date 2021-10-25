@@ -3,7 +3,6 @@
 namespace mgboot\dal\redis;
 
 use mgboot\common\Cast;
-use mgboot\common\util\ArrayUtils;
 use mgboot\dal\GobackendSettings;
 use mgboot\dal\pool\PoolManager;
 use mgboot\common\swoole\Swoole;
@@ -22,45 +21,37 @@ final class RedisCmd
     const EXECUTOR_TYPE_PHPREDIS = 2;
 
     /**
-     * @var RedisConfig|null
+     * @var array
      */
-    private static $redisConfig = null;
-
-    /**
-     * @var GobackendSettings|null
-     */
-    private static $gobackendSettings = null;
+    private static $map1 = [];
 
     private function __construct()
     {
     }
 
-    public static function withRedisConfig(array $settings): void
+    public static function gobackendEnabled(?bool $flag = null, ?int $workerId = null): bool
     {
-        self::$redisConfig = RedisConfig::create($settings);
-    }
+        if (Swoole::inCoroutineMode(true)) {
+            if (!is_int($workerId)) {
+                $workerId = Swoole::getWorkerId();
+            }
 
-    public static function getRedisConfig(): RedisConfig
-    {
-        $cfg = self::$redisConfig;
-        return $cfg instanceof RedisConfig ? $cfg : RedisConfig::create();
-    }
+            $key = "gobackendEnabledWorker$workerId";
+        } else {
+            $key = 'gobackendEnabledNoworker';
+        }
 
-    public static function gobackendEnabled(?array $settings = null): bool
-    {
-        if (ArrayUtils::isAssocArray($settings)) {
-            self::$gobackendSettings = GobackendSettings::create($settings);
+        if (is_bool($flag)) {
+            self::$map1[$key] = $flag;
             return false;
         }
 
-        $settings = self::$gobackendSettings;
-        return $settings instanceof GobackendSettings && $settings->isEnabled();
-    }
+        if (self::$map1[$key] !== true) {
+            return false;
+        }
 
-    public static function getGobackendSettings(): GobackendSettings
-    {
-        $settings = self::$gobackendSettings;
-        return $settings instanceof GobackendSettings ? $settings : GobackendSettings::create();
+        $settings = GobackendSettings::loadCurrent($workerId);
+        return $settings instanceof GobackendSettings && !$settings->isEnabled();
     }
 
     public static function loadScript(string $scriptName): string
@@ -1395,16 +1386,16 @@ final class RedisCmd
             $cmd = strtoupper($cmd);
         }
 
-        $settings = self::getGobackendSettings();
+        $settings = GobackendSettings::loadCurrent();
 
-        if (!$settings->isEnabled()) {
+        if (!is_object($settings) || !$settings->isEnabled()) {
             throw new RuntimeException('RedisCmd: fail to load gobackend settings');
         }
 
         $host = $settings->getHost();
 
-        if (empty($host)) {
-            throw new RuntimeException('RedisCmd: gobackend settings: host not specified]');
+        if ($host === '') {
+            $host = '127.0.0.1';
         }
 
         $port = $settings->getPort();

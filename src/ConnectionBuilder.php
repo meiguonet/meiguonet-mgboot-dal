@@ -2,24 +2,23 @@
 
 namespace mgboot\dal;
 
-use mgboot\dal\db\DB;
-use mgboot\dal\redis\RedisCmd;
+use mgboot\dal\db\DbConfig;
+use mgboot\dal\redis\RedisConfig;
 use PDO;
 use Redis;
 use Throwable;
 
 final class ConnectionBuilder
 {
-
     private function __construct()
     {
     }
 
     public static function buildPdoConnection(): ?PDO
     {
-        $cfg = DB::getDbConfig();
+        $cfg = DbConfig::loadCurrent();
 
-        if (!$cfg->isEnabled()) {
+        if (!is_object($cfg) || !$cfg->isEnabled()) {
             return null;
         }
 
@@ -99,9 +98,9 @@ final class ConnectionBuilder
 
     public static function buildRedisConnection(): ?Redis
     {
-        $cfg = RedisCmd::getRedisConfig();
+        $cfg = RedisConfig::loadCurrent();
 
-        if (!$cfg->isEnabled()) {
+        if (!is_object($cfg) || !$cfg->isEnabled()) {
             return null;
         }
 

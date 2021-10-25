@@ -2,6 +2,7 @@
 
 namespace mgboot\dal\db;
 
+use mgboot\dal\pool\PoolInfo;
 use mgboot\dal\pool\PoolInterface;
 use mgboot\dal\pool\PoolTrait;
 use PDO;
@@ -11,20 +12,27 @@ final class PdoPool implements PoolInterface
 {
     use PoolTrait;
 
-    private function __construct(array $settings)
+    private function __construct(int $workerId, PoolInfo $poolInfo, array $settings)
     {
-        $this->init(array_merge($settings, ['poolType' => 'pdo']));
+        $settings['poolType'] = 'pdo';
+        $this->init($workerId, $poolInfo, $settings);
     }
 
-    public static function create(array $settings): self
+    public static function create(int $workerId, PoolInfo $poolInfo, array $settings): self
     {
-        return new self($settings);
+        return new self($workerId, $poolInfo, $settings);
     }
 
     private function newConnection(): ?PDO
     {
+        $cfg = DbConfig::loadCurrent($this->workerId);
+
+        if (!($cfg instanceof DbConfig) || !$cfg->isEnabled()) {
+            return null;
+        }
+
         try {
-            $pdo = PdoConnection::create($this->poolId, DB::getDbConfig());
+            $pdo = PdoConnection::create($this->poolId, $cfg);
         } catch (Throwable $ex) {
             $pdo = null;
         }

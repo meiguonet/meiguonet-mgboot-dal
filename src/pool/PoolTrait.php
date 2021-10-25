@@ -4,8 +4,6 @@ namespace mgboot\dal\pool;
 
 use mgboot\common\Cast;
 use mgboot\common\constant\Regexp;
-use mgboot\common\swoole\Swoole;
-use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\ArrayUtils;
 use mgboot\common\util\StringUtils;
 use mgboot\dal\ConnectionBuilder;
@@ -18,14 +16,9 @@ use Throwable;
 trait PoolTrait
 {
     /**
-     * @var bool
+     * @var int
      */
-    private $isInDebugMode = false;
-
-    /**
-     * @var LoggerInterface|null
-     */
-    private $logger = null;
+    private $workerId;
 
     /**
      * @var string
@@ -56,6 +49,21 @@ trait PoolTrait
      * @var int
      */
     private $idleCheckInterval = 10;
+
+    /**
+     * @var PoolInfo
+     */
+    private $poolInfo;
+
+    /**
+     * @var bool
+     */
+    private $isInDebugMode = false;
+
+    /**
+     * @var LoggerInterface|null
+     */
+    private $logger = null;
 
     public function inDebugMode(?bool $flag = null): bool
     {
@@ -92,14 +100,6 @@ trait PoolTrait
 
     public function run(): void
     {
-        $workerId = Swoole::getWorkerId();
-        $poolType = $this->getPoolType();
-        $ch = PoolManager::getPoolChan($poolType, $workerId);
-
-        if (!is_object($ch)) {
-            return;
-        }
-
         $currentActive = 0;
 
         for ($i = 1; $i <= $this->minActive; $i++) {
@@ -110,28 +110,17 @@ trait PoolTrait
             }
 
             $currentActive++;
-            $ch->push($conn);
+            $this->poolInfo->getConnChan()->push($conn);
         }
 
-        $key = "{$poolType}Pool$workerId";
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (is_object($table)) {
-            $table->set($key, [
-                'maxActive' => $this->maxActive,
-                'currentActive' => $currentActive,
-                'idleCheckRunning' => 0,
-                'closed' => 0
-            ]);
-        }
-
+        $this->updateCurrentActive($currentActive);
         $logger = $this->logger;
 
         if (is_object($logger) && $this->inDebugMode()) {
             $msg = sprintf(
                 'in worker%d, %s pool[minActive=%d, maxActive=%d, currentActive=%d, takeTimeout=%ds, maxIdleTime=%ds, idleCheckInterval=%ds] is running',
-                $workerId,
-                $poolType,
+                $this->workerId,
+                $this->getPoolType(),
                 $this->minActive,
                 $this->maxActive,
                 $currentActive,
@@ -143,12 +132,11 @@ trait PoolTrait
             $logger->info($msg);
         }
 
-        $this->runIdleChecker($ch);
+        $this->runIdleChecker();
     }
 
     public function take($timeout = null)
     {
-        $workerId = Swoole::getWorkerId();
         $poolType = $this->getPoolType();
         $conn = null;
         $ex1 = new RuntimeException("fail to take $poolType connection from connection pool");
@@ -171,13 +159,7 @@ trait PoolTrait
             return $conn;
         }
 
-        $ch = PoolManager::getPoolChan($poolType, $workerId);
-
-        if (!is_object($ch)) {
-            throw $ex1;
-        }
-
-        $conn = $ch->pop(0.01);
+        $conn = $this->poolInfo->getConnChan()->pop(0.01);
 
         if (is_object($conn)) {
             $this->connLastUsedAt($conn, time());
@@ -202,7 +184,7 @@ trait PoolTrait
             $timeout = $this->takeTimeout;
         }
 
-        $conn = $ch->pop($timeout);
+        $conn = $this->poolInfo->getConnChan()->pop($timeout);
 
         if (!is_object($conn)) {
             $this->logTakeFail();
@@ -220,47 +202,158 @@ trait PoolTrait
             return;
         }
 
-        $ch = PoolManager::getPoolChan($this->getPoolType());
-
-        if (!is_object($ch)) {
-            return;
-        }
-
         if ($conn->getPoolId() !== $this->poolId) {
             return;
         }
 
-        $ch->push($conn);
+        $this->poolInfo->getConnChan()->push($conn);
         $this->logReleaseSuccess($conn);
     }
 
     public function updateCurrentActive(int $num): void
     {
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (!is_object($table)) {
+        if ($num === 1) {
+            $this->poolInfo->getCurrentActiveAtomic()->add(1);
             return;
         }
 
-        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
-
-        if ($num > 0) {
-            $table->incr($key, 'currentActive', $num);
-        } else {
-            $n1 = $this->getCurrentActive();
-            $n2 = abs($num);
-
-            if ($n1 - $n2 < 0) {
-                $table->set($key, ['currentActive' => 0]);
-            } else {
-                $table->decr($key, 'currentActive', $n2);
+        if ($num === -1) {
+            if ($this->getCurrentActive() !== 0) {
+                $this->poolInfo->getCurrentActiveAtomic()->sub(1);
             }
+
+            return;
         }
+
+        $this->poolInfo->getCurrentActiveAtomic()->set($num);
     }
 
-    /** @noinspection PhpFullyQualifiedNameUsageInspection */
-    private function runIdleChecker(\Swoole\Coroutine\Channel $ch): void
+    public function destroy($timeout = null): void
     {
+        if (is_string($timeout) && $timeout !== '') {
+            $timeout = Cast::toDuration($timeout);
+        }
+
+        if (!is_int($timeout) || $timeout < 1) {
+            $timeout = 5;
+        }
+
+        $now = time();
+
+        while (true) {
+            if (time() - $now > $timeout) {
+                break;
+            }
+
+            for ($i = 1; $i <= $this->poolInfo->getMaxActive(); $i++) {
+                $conn = $this->poolInfo->getConnChan()->pop(0.01);
+
+                if (!is_object($conn)) {
+                    continue;
+                }
+
+                if ($conn instanceof Redis) {
+                    $conn->close();
+                }
+
+                unset($conn);
+            }
+
+            /** @noinspection PhpFullyQualifiedNameUsageInspection */
+            \Swoole\Coroutine::sleep(0.05);
+        }
+
+        $this->poolInfo->getConnChan()->close();
+    }
+
+    private function init(int $workerId, PoolInfo $poolInfo, array $settings): void
+    {
+        $settings = $this->handleSettings($settings);
+        $minActive = 10;
+
+        if (is_int($settings['minActive']) && $settings['minActive'] > 0) {
+            $minActive = $settings['minActive'];
+        }
+
+        $maxActive = $minActive;
+
+        if (is_int($settings['maxActive']) && $settings['maxActive'] > $minActive) {
+            $maxActive = $settings['maxActive'];
+        }
+
+        $poolInfo->setMaxActive($maxActive);
+        $takeTimeout = 3.0;
+        $n1 = Cast::toFloat($settings['takeTimeout']);
+
+        if ($n1 > 0) {
+            $takeTimeout = $n1;
+        }
+
+        if ($takeTimeout < 1.0) {
+            $takeTimeout = 1.0;
+        }
+
+        $maxIdleTime = 1800;
+
+        if (is_int($settings['maxIdleTime']) && $settings['maxIdleTime'] > 0) {
+            $maxIdleTime = $settings['maxIdleTime'];
+        } else if (is_string($settings['maxIdleTime']) && $settings['maxIdleTime'] !== '') {
+            $n1 = StringUtils::toDuration($settings['maxIdleTime']);
+
+            if ($n1 > 0) {
+                $maxIdleTime = $n1;
+            }
+        }
+
+        $idleCheckInterval = 10;
+
+        if (is_int($settings['idleCheckInterval']) && $settings['idleCheckInterval'] > 0) {
+            $idleCheckInterval = $settings['idleCheckInterval'];
+        } else if (is_string($settings['idleCheckInterval']) && $settings['idleCheckInterval'] !== '') {
+            $n1 = StringUtils::toDuration($settings['idleCheckInterval']);
+
+            if ($n1 > 0) {
+                $idleCheckInterval = $n1;
+            }
+        }
+
+        $this->workerId = $workerId;
+        $this->poolId = $settings['poolType'] . ':' . StringUtils::getRandomString(12);
+        $this->minActive = $minActive;
+        $this->maxActive = $maxActive;
+        $this->takeTimeout = $takeTimeout;
+        $this->maxIdleTime = $maxIdleTime;
+        $this->idleCheckInterval = $idleCheckInterval;
+        $this->poolInfo = $poolInfo;
+    }
+
+    private function handleSettings(array $settings): array
+    {
+        if (!ArrayUtils::isAssocArray($settings)) {
+            return [];
+        }
+
+        foreach ($settings as $key => $val) {
+            $newKey = strtr($key, ['-' => ' ', '_' => ' ']);
+            $newKey = preg_replace(Regexp::SPACE_SEP, ' ', $newKey);
+            $newKey = str_replace(' ', '', ucwords($newKey));
+            $newKey = lcfirst($newKey);
+
+            if ($newKey === $key) {
+                continue;
+            }
+
+            $settings[$newKey] = $val;
+            unset($settings[$key]);
+        }
+
+        return $settings;
+    }
+
+    private function runIdleChecker(): void
+    {
+        $ch = $this->poolInfo->getConnChan();
+
         /** @noinspection PhpFullyQualifiedNameUsageInspection */
         \Swoole\Timer::tick($this->idleCheckInterval * 1000, function () use ($ch) {
             $this->idleCheckRunning(true);
@@ -315,87 +408,6 @@ trait PoolTrait
         });
     }
 
-    private function init(array $settings): void
-    {
-        $settings = $this->handleSettings($settings);
-        $minActive = 10;
-
-        if (is_int($settings['minActive']) && $settings['minActive'] > 0) {
-            $minActive = $settings['minActive'];
-        }
-
-        $maxActive = $minActive;
-
-        if (is_int($settings['maxActive']) && $settings['maxActive'] > $minActive) {
-            $maxActive = $settings['maxActive'];
-        }
-
-        $takeTimeout = 3.0;
-        $n1 = Cast::toFloat($settings['takeTimeout']);
-
-        if ($n1 > 0) {
-            $takeTimeout = $n1;
-        }
-
-        if ($takeTimeout < 1.0) {
-            $takeTimeout = 1.0;
-        }
-
-        $maxIdleTime = 1800;
-
-        if (is_int($settings['maxIdleTime']) && $settings['maxIdleTime'] > 0) {
-            $maxIdleTime = $settings['maxIdleTime'];
-        } else if (is_string($settings['maxIdleTime']) && $settings['maxIdleTime'] !== '') {
-            $n1 = StringUtils::toDuration($settings['maxIdleTime']);
-
-            if ($n1 > 0) {
-                $maxIdleTime = $n1;
-            }
-        }
-
-        $idleCheckInterval = 10;
-
-        if (is_int($settings['idleCheckInterval']) && $settings['idleCheckInterval'] > 0) {
-            $idleCheckInterval = $settings['idleCheckInterval'];
-        } else if (is_string($settings['idleCheckInterval']) && $settings['idleCheckInterval'] !== '') {
-            $n1 = StringUtils::toDuration($settings['idleCheckInterval']);
-
-            if ($n1 > 0) {
-                $idleCheckInterval = $n1;
-            }
-        }
-
-        $this->poolId = $settings['poolType'] . ':' . StringUtils::getRandomString(12);
-        $this->minActive = $minActive;
-        $this->maxActive = $maxActive;
-        $this->takeTimeout = $takeTimeout;
-        $this->maxIdleTime = $maxIdleTime;
-        $this->idleCheckInterval = $idleCheckInterval;
-    }
-
-    private function handleSettings(array $settings): array
-    {
-        if (!ArrayUtils::isAssocArray($settings)) {
-            return [];
-        }
-
-        foreach ($settings as $key => $val) {
-            $newKey = strtr($key, ['-' => ' ', '_' => ' ']);
-            $newKey = preg_replace(Regexp::SPACE_SEP, ' ', $newKey);
-            $newKey = str_replace(' ', '', ucwords($newKey));
-            $newKey = lcfirst($newKey);
-
-            if ($newKey === $key) {
-                continue;
-            }
-
-            $settings[$newKey] = $val;
-            unset($settings[$key]);
-        }
-
-        return $settings;
-    }
-
     private function buildConnectionInternal(): ?ConnectionInterface
     {
         if (!method_exists($this, 'newConnection')) {
@@ -413,65 +425,44 @@ trait PoolTrait
 
     private function getCurrentActive(): int
     {
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (!is_object($table)) {
-            return 0;
-        }
-
-        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
-        $entry = $table->get($key);
-        return is_array($entry) ? Cast::toInt($entry['currentActive'], 0) : 0;
+        $n1 = $this->poolInfo->getCurrentActiveAtomic()->get();
+        return is_int($n1) ? $n1 : 0;
     }
 
     private function getIdleCount(): int
     {
-        $ch = PoolManager::getPoolChan($this->getPoolType());
-
-        if (!is_object($ch)) {
-            return 0;
-        }
-
-        $data = $ch->stats();
+        $data = $this->poolInfo->getConnChan()->stats();
         return is_array($data) ? Cast::toInt($data['queue_num'], 0) : 0;
     }
 
     private function idleCheckRunning(?bool $flag = null): bool
     {
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (!is_object($table)) {
-            return false;
-        }
-
-        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
-
         if (is_bool($flag)) {
-            $table->set($key, ['idleCheckRunning' => $flag === true ? 1 : 0]);
+            if ($flag) {
+                $this->poolInfo->getIdleCheckRunningAtomic()->cmpset(0, 1);
+            } else {
+                $this->poolInfo->getIdleCheckRunningAtomic()->cmpset(1, 0);
+            }
+
             return false;
         }
 
-        $entry = $table->get($key);
-        return is_array($entry) && Cast::toInt($entry['idleCheckRunning']) === 1;
+        return $this->poolInfo->getIdleCheckRunningAtomic()->get() === 1;
     }
 
     private function closed(?bool $flag = null): bool
     {
-        $table = SwooleTable::getTable(SwooleTable::poolTableName());
-
-        if (!is_object($table)) {
-            return false;
-        }
-
-        $key = sprintf('%sPool%d', $this->getPoolType(), Swoole::getWorkerId());
-
         if (is_bool($flag)) {
-            $table->set($key, ['closed' => $flag === true ? 1 : 0]);
+            if ($flag) {
+                $this->poolInfo->getClosedAtomic()->cmpset(0, 1);
+            } else {
+                $this->poolInfo->getClosedAtomic()->cmpset(1, 0);
+            }
+
             return false;
         }
 
-        $entry = $table->get($key);
-        return is_array($entry) && Cast::toInt($entry['closed']) === 1;
+        return $this->poolInfo->getClosedAtomic()->get() === 1;
     }
 
     private function connLastUsedAt($conn, ?int $timestamp = null): int
@@ -497,7 +488,7 @@ trait PoolTrait
             return;
         }
 
-        $workerId = Swoole::getWorkerId();
+        $workerId = $this->workerId;
 
         $msg = sprintf(
             '%s%s pool start idle connection check...',
@@ -520,7 +511,7 @@ trait PoolTrait
             return;
         }
 
-        $workerId = Swoole::getWorkerId();
+        $workerId = $this->workerId;
 
         $msg = sprintf(
             '%s%s connection[%s] has reach the max idle time, remove from pool, pool stats: [currentActive=%d, idleCount=%d]',
@@ -546,7 +537,7 @@ trait PoolTrait
             return;
         }
 
-        $workerId = Swoole::getWorkerId();
+        $workerId = $this->workerId;
 
         $msg = sprintf(
             '%ssuccess to take %s connection[%s] from pool, pool stats: [currentActive=%d, idleCount=%d]',
@@ -572,7 +563,7 @@ trait PoolTrait
             return;
         }
 
-        $workerId = Swoole::getWorkerId();
+        $workerId = $this->workerId;
 
         $msg = sprintf(
             '%sfail to take %s connection from pool',
@@ -595,7 +586,7 @@ trait PoolTrait
             return;
         }
 
-        $workerId = Swoole::getWorkerId();
+        $workerId = $this->workerId;
 
         $msg = sprintf(
             '%srelease %s connection[%s] to pool, pool stats: [currentActive=%d, idleCount=%d]',
