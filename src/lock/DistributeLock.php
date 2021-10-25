@@ -5,8 +5,8 @@ namespace mgboot\dal\lock;
 use mgboot\common\Cast;
 use mgboot\common\swoole\Swoole;
 use mgboot\common\swoole\SwooleTable;
+use mgboot\common\util\FileUtils;
 use mgboot\common\util\StringUtils;
-use mgboot\dal\caching\Cache;
 use mgboot\dal\ConnectionBuilder;
 use Redis;
 use Throwable;
@@ -23,15 +23,25 @@ final class DistributeLock
      */
     private $contents;
 
-    private function __construct(string $key)
+    /**
+     * @var string
+     */
+    private $cacheDir;
+
+    private function __construct(string $key, string $cacheDir = '')
     {
+        if ($cacheDir === '') {
+            $cacheDir = FileUtils::getRealpath('classpath:cache');
+        }
+
         $this->key = $key;
-        $this->contents = StringUtils::getRandomString(32);
+        $this->contents = StringUtils::getRandomString(16);
+        $this->cacheDir = $cacheDir;
     }
 
-    public static function create(string $key): self
+    public static function create(string $key, string $cacheDir = ''): self
     {
-        return new self($key);
+        return new self($key, $cacheDir);
     }
 
     /**
@@ -57,7 +67,7 @@ final class DistributeLock
             $ttl = 30;
         }
 
-        $key = sprintf('%s@%s', Cache::buildCacheKey('redislock'), $this->key);
+        $key = "redislock@$this->key";
         $contents = $this->contents;
 
         if (Swoole::inCoroutineMode(true)) {
@@ -108,7 +118,7 @@ final class DistributeLock
 
     public function release(): void
     {
-        $key = sprintf('%s@%s', Cache::buildCacheKey('redislock'), $this->key);
+        $key = "redislock@$this->key";
         $contents = $this->contents;
 
         if (Swoole::inCoroutineMode(true)) {
@@ -139,12 +149,14 @@ final class DistributeLock
 
     private function ensureLuaShaExists(Redis $redis, string $type) : string
     {
-        $cacheKey = "luasha.redislock.$type";
-        $cache = Cache::store('file');
-        $luaSha = $cache->get($cacheKey);
+        $cacheFile = $this->cacheDir . "/luasha.redislock.$type.dat";
 
-        if (is_string($luaSha) && $luaSha !== '') {
-            return $luaSha;
+        if (is_file($cacheFile)) {
+            $contents = file_get_contents($cacheFile);
+
+            if (is_string($contents) && $contents !== '') {
+                return $contents;
+            }
         }
 
         $fpath = __DIR__ . "/redislock.$type.lua";
@@ -158,13 +170,35 @@ final class DistributeLock
             $luaSha = $redis->script('load', trim($contents));
 
             if (is_string($luaSha) && $luaSha !== '') {
-                $cache->set($cacheKey, $luaSha);
+                $this->writeLuashaToCacheFile($cacheFile, $luaSha);
                 return $luaSha;
             }
 
             return '';
         } catch (Throwable $ex) {
             return '';
+        }
+    }
+
+    private function writeLuashaToCacheFile(string $cacheFile, string $contents): void
+    {
+        $dir = dirname($cacheFile);
+
+        if (!is_string($dir) || $dir === '') {
+            return;
+        }
+
+        if (!is_dir($dir)) {
+            mkdir($dir, 0644, true);
+        }
+
+        if (!is_dir($dir) || !is_writable($dir)) {
+            return;
+        }
+
+        try {
+            file_put_contents($cacheFile, $contents);
+        } catch (Throwable $ex) {
         }
     }
 

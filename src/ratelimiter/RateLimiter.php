@@ -6,7 +6,7 @@ use mgboot\common\Cast;
 use mgboot\common\swoole\Swoole;
 use mgboot\common\swoole\SwooleTable;
 use mgboot\common\util\ArrayUtils;
-use mgboot\dal\caching\Cache;
+use mgboot\common\util\FileUtils;
 use mgboot\dal\ConnectionBuilder;
 use Redis;
 use Throwable;
@@ -29,12 +29,22 @@ final class RateLimiter
     private $duration;
 
     /**
+     * @var string
+     */
+    private $cacheDir;
+
+    /**
      * @param string $id
      * @param int $count
      * @param int|string $duration
+     * @param string $cacheDir
      */
-    private function __construct(string $id, int $count, $duration)
+    private function __construct(string $id, int $count, $duration, string $cacheDir = '')
     {
+        if ($cacheDir === '') {
+            $cacheDir = FileUtils::getRealpath('classpath:cache');
+        }
+
         $this->id = $id;
         $this->count = $count;
 
@@ -47,17 +57,19 @@ final class RateLimiter
         }
 
         $this->duration = $duration;
+        $this->cacheDir = $cacheDir;
     }
 
     /**
      * @param string $id
      * @param int $count
      * @param int|string $duration
+     * @param string $cacheDir
      * @return self
      */
-    public static function create(string $id, int $count, $duration): self
+    public static function create(string $id, int $count, $duration, string $cacheDir = ''): self
     {
-        return new self($id, $count, $duration);
+        return new self($id, $count, $duration, $cacheDir);
     }
 
     public function getLimit(): array
@@ -79,8 +91,7 @@ final class RateLimiter
         }
 
         $id = sprintf(
-            '%s@%s@%d@%ds',
-            Cache::buildCacheKey('ratelimiter'),
+            'ratelimiter@%s@%d@%ds',
             md5($this->id),
             $this->count,
             $this->duration
@@ -181,12 +192,14 @@ final class RateLimiter
 
     private function ensureLuaShaExists(Redis $redis) : string
     {
-        $cacheKey = 'luasha.ratelimiter';
-        $cache = Cache::store('file');
-        $luaSha = $cache->get($cacheKey);
+        $cacheFile = $this->cacheDir . '/luasha.ratelimiter.dat';
 
-        if (is_string($luaSha) && $luaSha !== '') {
-            return $luaSha;
+        if (is_file($cacheFile)) {
+            $contents = file_get_contents($cacheFile);
+
+            if (is_string($contents) && $contents !== '') {
+                return $contents;
+            }
         }
 
         $fpath = __DIR__ . '/ratelimiter.lua';
@@ -200,13 +213,35 @@ final class RateLimiter
             $luaSha = $redis->script('load', trim($contents));
 
             if (is_string($luaSha) && $luaSha !== '') {
-                $cache->set($cacheKey, $luaSha);
+                $this->writeLuashaToCacheFile($cacheFile, $luaSha);
                 return $luaSha;
             }
 
             return '';
         } catch (Throwable $ex) {
             return '';
+        }
+    }
+
+    private function writeLuashaToCacheFile(string $cacheFile, string $contents): void
+    {
+        $dir = dirname($cacheFile);
+
+        if (!is_string($dir) || $dir === '') {
+            return;
+        }
+
+        if (!is_dir($dir)) {
+            mkdir($dir, 0644, true);
+        }
+
+        if (!is_dir($dir) || !is_writable($dir)) {
+            return;
+        }
+
+        try {
+            file_put_contents($cacheFile, $contents);
+        } catch (Throwable $ex) {
         }
     }
 }
