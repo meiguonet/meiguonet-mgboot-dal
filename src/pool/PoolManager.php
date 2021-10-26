@@ -13,12 +13,7 @@ final class PoolManager
     /**
      * @var array
      */
-    private static $pools = [];
-
-    /**
-     * @var PoolInfo[]
-     */
-    private static $poolInfoList = [];
+    private static $map1 = [];
 
     private function __construct()
     {
@@ -35,7 +30,8 @@ final class PoolManager
         }
 
         $poolType = StringUtils::substringBefore($pool->getPoolId(), ':');
-        self::$pools["$poolType-worker$workerId"] = $pool;
+        $key = "{$poolType}Pool_worker$workerId";
+        self::$map1[$key] = $pool;
     }
 
     public static function getPool(string $poolType, ?int $workerId = null): ?PoolInterface
@@ -48,22 +44,35 @@ final class PoolManager
             return null;
         }
 
-        $pool = self::$pools["$poolType-worker$workerId"];
+        $key = "{$poolType}Pool_worker$workerId";
+        $pool = self::$map1[$key];
         return $pool instanceof PoolInterface ? $pool : null;
     }
 
     public static function withPoolInfo(PoolInfo $poolInfo): void
     {
-        self::$poolInfoList[] = $poolInfo;
+        $key = 'poolInfoList';
+
+        if (!isset(self::$map1[$key])) {
+            self::$map1[$key] = [$poolInfo];
+        } else {
+            self::$map1[$key][] = $poolInfo;
+        }
     }
 
     public static function getPoolInfo(int $workerId): ?PoolInfo
     {
-        if ($workerId < 0 || $workerId > count(self::$poolInfoList) - 1) {
+        if ($workerId < 0 || $workerId) {
             return null;
         }
 
-        return self::$poolInfoList[$workerId];
+        $key = 'poolInfoList';
+
+        if (!is_array(self::$map1[$key]) || $workerId > count(self::$map1[$key]) - 1) {
+            return null;
+        }
+
+        return self::$map1[$key][$workerId];
     }
 
     public static function getConnection(string $connectionType)
@@ -71,7 +80,7 @@ final class PoolManager
         if (Swoole::inCoroutineMode(true)) {
             $poolType = in_array($connectionType, ['pdo', 'redis']) ? $connectionType : 'unknow';
             $workerId = Swoole::getWorkerId();
-            $pool = self::$pools["$poolType-worker$workerId"];
+            $pool = self::getPool($poolType, $workerId);
             $conn = null;
 
             if ($pool instanceof PoolInterface) {

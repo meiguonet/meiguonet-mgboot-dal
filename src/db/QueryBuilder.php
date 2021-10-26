@@ -585,6 +585,43 @@ final class QueryBuilder
         return $this->where(Expression::create($expr), ...$args);
     }
 
+    public function whereSofeDelete(bool $flag): self
+    {
+        $schemas = DB::getTableSchema($this->tableName);
+
+        $fieldNames = [
+            'delete_at',
+            'deleteAt'
+        ];
+
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'datetime') !== false) {
+                if ($flag) {
+                    return $this->whereNotNull($schema['fieldName']);
+                } else {
+                    return $this->whereNull($schema['fieldName']);
+                }
+            }
+        }
+
+        $fieldNames = [
+            'del_flag',
+            'delFlag'
+        ];
+
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'int') !== false) {
+                if ($flag) {
+                    return $this->where($schema['fieldName'], 1);
+                } else {
+                    return $this->where($schema['fieldName'], 0);
+                }
+            }
+        }
+
+        return $this;
+    }
+
     public function whereRaw(string $expr, ...$args): self
     {
         if ($expr === '') {
@@ -894,6 +931,43 @@ final class QueryBuilder
     {
         $expr = sprintf('UNIX_TIMESTAMP(%s)', $this->getFullTableNameOrFullFieldName($fieldName));
         return $this->orWhere(Expression::create($expr), ...$args);
+    }
+
+    public function orWhereSofeDelete(bool $flag): self
+    {
+        $schemas = DB::getTableSchema($this->tableName);
+
+        $fieldNames = [
+            'delete_at',
+            'deleteAt'
+        ];
+
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'datetime') !== false) {
+                if ($flag) {
+                    return $this->orWhereNotNull($schema['fieldName']);
+                } else {
+                    return $this->orWhereNull($schema['fieldName']);
+                }
+            }
+        }
+
+        $fieldNames = [
+            'del_flag',
+            'delFlag'
+        ];
+
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'int') !== false) {
+                if ($flag) {
+                    return $this->orWhere($schema['fieldName'], 1);
+                } else {
+                    return $this->orWhere($schema['fieldName'], 0);
+                }
+            }
+        }
+
+        return $this;
     }
 
     public function orWhereRaw(string $expr, ...$args): self
@@ -1213,12 +1287,19 @@ final class QueryBuilder
     {
         $schemas = DB::getTableSchema($this->tableName);
 
-        $matched = ArrayUtils::first($schemas, function ($it) {
-            return $it['fieldName'] === 'ctime' && strpos($it['fieldType'], 'datetime') !== false;
-        });
+        $fieldNames = [
+            'ctime',
+            'create_at',
+            'createAt',
+            'create_time',
+            'createTime'
+        ];
 
-        if (!empty($matched)) {
-            $data['ctime'] = date(DateTimeFormat::FULL);
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'datetime') !== false) {
+                $data[$schema['fieldName']] = date(DateTimeFormat::FULL);
+                break;
+            }
         }
 
         $columns = [];
@@ -1249,12 +1330,16 @@ final class QueryBuilder
     {
         $schemas = DB::getTableSchema($this->tableName);
 
-        $matched = ArrayUtils::first($schemas, function ($it) {
-            return $it['fieldName'] === 'updateAt' && strpos($it['fieldType'], 'datetime') !== false;
-        });
+        $fieldNames = [
+            'update_at',
+            'updateAt'
+        ];
 
-        if (!empty($matched)) {
-            $data['updateAt'] = date(DateTimeFormat::FULL);
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'datetime') !== false) {
+                $data[$schema['fieldName']] = date(DateTimeFormat::FULL);
+                break;
+            }
         }
 
         $sets = [];
@@ -1383,17 +1468,38 @@ final class QueryBuilder
 
     public function sofeDelete($txm = null): void
     {
+        $updateSet = [];
         $schemas = DB::getTableSchema($this->tableName);
 
-        $matched = ArrayUtils::first($schemas, function ($it) {
-            return $it['fieldName'] === 'delFlag' && strpos($it['fieldType'], 'int') !== false;
-        });
+        $fieldNames = [
+            'delete_at',
+            'deleteAt'
+        ];
 
-        if (empty($matched)) {
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'datetime') !== false) {
+                $updateSet[$schema['fieldName']] = date(DateTimeFormat::FULL);
+                break;
+            }
+        }
+
+        $fieldNames = [
+            'del_flag',
+            'delFlag'
+        ];
+
+        foreach ($schemas as $schema) {
+            if (in_array($schema['fieldName'], $fieldNames) && strpos($schema['fieldType'], 'int') !== false) {
+                $updateSet[$schema['fieldName']] = 1;
+                break;
+            }
+        }
+
+        if (empty($updateSet)) {
             return;
         }
 
-        $this->update(['delFlag' => 1], $txm);
+        $this->update($updateSet, $txm);
     }
 
     public function delete($txm = null): int

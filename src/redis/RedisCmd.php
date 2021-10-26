@@ -36,9 +36,9 @@ final class RedisCmd
                 $workerId = Swoole::getWorkerId();
             }
 
-            $key = "gobackendEnabledWorker$workerId";
+            $key = "gobackendEnabled_worker$workerId";
         } else {
-            $key = 'gobackendEnabledNoworker';
+            $key = 'gobackendEnabled_noworker';
         }
 
         if (is_bool($flag)) {

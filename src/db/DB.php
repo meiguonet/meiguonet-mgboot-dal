@@ -40,9 +40,9 @@ final class DB
                 $workerId = Swoole::getWorkerId();
             }
 
-            $key = "loggerWorker$workerId";
+            $key = "logger_worker$workerId";
         } else {
-            $key = 'loggerNoworker';
+            $key = 'logger_noworker';
         }
 
         self::$map1[$key] = $logger;
@@ -55,9 +55,9 @@ final class DB
                 $workerId = Swoole::getWorkerId();
             }
 
-            $key = "loggerWorker$workerId";
+            $key = "logger_worker$workerId";
         } else {
-            $key = 'loggerNoworker';
+            $key = 'logger_noworker';
         }
 
         $logger = self::$map1[$key];
@@ -71,9 +71,9 @@ final class DB
                 $workerId = Swoole::getWorkerId();
             }
 
-            $key = "debugLogEnabledWorker$workerId";
+            $key = "debugLogEnabled_orker$workerId";
         } else {
-            $key = 'debugLogEnabledNoworker';
+            $key = 'debugLogEnabled_noworker';
         }
 
         if (is_bool($flag)) {
@@ -91,9 +91,9 @@ final class DB
                 $workerId = Swoole::getWorkerId();
             }
 
-            $key = "gobackendEnabledWorker$workerId";
+            $key = "gobackendEnabled_worker$workerId";
         } else {
-            $key = 'gobackendEnabledNoworker';
+            $key = 'gobackendEnabled_noworker';
         }
 
         if (is_bool($flag)) {
@@ -116,9 +116,9 @@ final class DB
                 $workerId = Swoole::getWorkerId();
             }
 
-            $key = "tableSchemasCacheFilepathWorker$workerId";
+            $key = "tableSchemasCacheFilepath_worker$workerId";
         } else {
-            $key = 'tableSchemasCacheFilepathNoworker';
+            $key = 'tableSchemasCacheFilepath_noworker';
         }
         
         self::$map1[$key] = FileUtils::getRealpath($fpath);
@@ -131,9 +131,9 @@ final class DB
                 $workerId = Swoole::getWorkerId();
             }
 
-            $key = "tableSchemasCacheFilepathWorker$workerId";
+            $key = "tableSchemasCacheFilepath_worker$workerId";
         } else {
-            $key = 'tableSchemasCacheFilepathNoworker';
+            $key = 'tableSchemasCacheFilepath_noworker';
         }
         
         $fpath = self::$map1[$key];
@@ -151,7 +151,7 @@ final class DB
             return;
         }
 
-        if (is_object(Swoole::getServer())) {
+        if (Swoole::inCoroutineMode(true)) {
             $schemas = self::buildTableSchemasInternal();
 
             if (empty($schemas)) {
@@ -159,7 +159,7 @@ final class DB
             }
             
             $workerId = Swoole::getWorkerId();
-            $key = "tableSchemasWorker$workerId";
+            $key = "tableSchemas_worker$workerId";
             self::$map1[$key] = $schemas;
             return;
         }
@@ -187,14 +187,24 @@ final class DB
             return self::buildTableSchemasInternal();
         }
 
-        if (is_object(Swoole::getServer())) {
+        if (Swoole::inCoroutineMode(true)) {
             $workerId = Swoole::getWorkerId();
-            $key = "tableSchemasWorker$workerId";
+            $key = "tableSchemas_worker$workerId";
             $schemas = self::$map1[$key];
+
+            if (!is_array($schemas) || empty($schemas)) {
+                self::buildTableSchemas();
+                $schemas = self::$map1[$key];
+            }
+
             return is_array($schemas) ? $schemas : [];
         }
 
         $cacheFile = self::getTableSchemasCacheFilepath();
+
+        if (!is_file($cacheFile)) {
+            self::buildTableSchemas();
+        }
 
         if (!is_file($cacheFile)) {
             return [];
@@ -1048,8 +1058,29 @@ final class DB
                     continue;
                 }
 
-                $schema = collect($items)->map(function ($item) {
+                $fieldNames = [
+                    'ctime',
+                    'create_at',
+                    'createAt',
+                    'create_time',
+                    'createTime',
+                    'update_at',
+                    'updateAt',
+                    'delete_at',
+                    'deleteAt',
+                    'del_flag',
+                    'delFlag'
+                ];
+
+                $schema = [];
+
+                foreach ($items as $item) {
                     $fieldName = $item['Field'];
+
+                    if (!in_array($fieldName, $fieldNames)) {
+                        continue;
+                    }
+
                     $nullable = stripos($item['Null'], 'YES') !== false;
                     $isPrimaryKey = $item['Key'] === 'PRI';
                     $defaultValue = $item['Default'];
@@ -1063,7 +1094,7 @@ final class DB
                         $fieldType = $parts[0];
                         $fieldSize = '';
                     }
-                    
+
                     if (!StringUtils::startsWith($fieldSize, '(') || !StringUtils::endsWith($fieldSize, ')')) {
                         $fieldSize = '';
                     } else {
@@ -1076,7 +1107,7 @@ final class DB
 
                     $unsigned = stripos($item['Type'], 'unsigned') !== false;
 
-                    return compact(
+                    $schema[] = compact(
                         'fieldName',
                         'fieldType',
                         'fieldSize',
@@ -1086,7 +1117,7 @@ final class DB
                         'autoIncrement',
                         'isPrimaryKey'
                     );
-                })->toArray();
+                }
             } catch (Throwable $ex) {
                 $schema = null;
             }
