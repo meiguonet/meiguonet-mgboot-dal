@@ -42,6 +42,11 @@ final class PoolInfo
         $this->fromMap($settings);
     }
 
+    public static function create(array $settings): self
+    {
+        return new self($settings);
+    }
+
     /**
      * @param int $maxActive
      */
