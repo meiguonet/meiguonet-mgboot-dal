@@ -49,24 +49,24 @@ final class PoolManager
         return $pool instanceof PoolInterface ? $pool : null;
     }
 
-    public static function withPoolInfo(PoolInfo $poolInfo): void
+    public static function withPoolInfo(string $poolType, PoolInfo $poolInfo): void
     {
-        $key = 'poolInfoList';
+        $key = "{$poolType}PoolInfoList";
 
-        if (!isset(self::$map1[$key])) {
+        if (!is_array(self::$map1[$key])) {
             self::$map1[$key] = [$poolInfo];
         } else {
             self::$map1[$key][] = $poolInfo;
         }
     }
 
-    public static function getPoolInfo(int $workerId): ?PoolInfo
+    public static function getPoolInfo(string $poolType, int $workerId): ?PoolInfo
     {
-        if ($workerId < 0 || $workerId) {
+        if ($workerId < 0) {
             return null;
         }
 
-        $key = 'poolInfoList';
+        $key = "{$poolType}PoolInfoList";
 
         if (!is_array(self::$map1[$key]) || $workerId > count(self::$map1[$key]) - 1) {
             return null;
